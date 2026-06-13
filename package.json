@@ -1,0 +1,40 @@
+{
+  "name": "fe-erp-bkd",
+  "version": "1.0.0",
+  "description": "Code Aqua ERP Solutions — Enterprise Resource Planning Backend API",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "nodemon src/app.js",
+    "seed:admin": "node src/utils/seedAdmin.js",
+    "seed:permissions": "node src/utils/seedPermissions.js",
+    "seed:return-types-units": "node src/utils/seedReturnTypesUnits.js",
+    "setup:complete": "npm run seed:admin && npm run seed:permissions && npm run seed:return-types-units",
+    "test:permissions": "node scripts/test-permissions.js",
+    "generate-ssl": "node scripts/generate-ssl-cert.js",
+    "generate-ssl-ps": "powershell -ExecutionPolicy Bypass -File scripts/generate-ssl-cert.ps1",
+    "generate-ssl-node": "node scripts/generate-ssl-node.js",
+    "test-ssl": "node scripts/test-ssl.js",
+    "setup": "bash scripts/setup.sh",
+    "setup-ps": "powershell -ExecutionPolicy Bypass -File scripts/setup-clean.ps1"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^10.0.0",
+    "express": "^4.17.1",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "morgan": "^1.10.0",
+    "mysql2": "^3.22.5",
+    "sequelize": "^6.37.7",
+    "twilio": "^5.8.0"
+  },
+  "devDependencies": {
+    "@types/dotenv": "^8.2.3",
+    "node-forge": "^1.3.1",
+    "nodemon": "^2.0.7"
+  },
+  "author": "Code Aqua ERP Solutions",
+  "license": "ISC"
+}
