@@ -95,6 +95,14 @@ const Customer = sequelize.define('Customer', {
             model: 'ledger_accounts',
             key: 'id',
         },
+    },
+    latitude: {
+        type: DataTypes.DECIMAL(10, 8),
+        allowNull: true,
+    },
+    longitude: {
+        type: DataTypes.DECIMAL(11, 8),
+        allowNull: true,
     }
 }, {
     timestamps: true,
