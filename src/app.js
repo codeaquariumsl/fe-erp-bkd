@@ -180,7 +180,7 @@ app.use('/api/bank-deposits', logUserActivity, authMiddleware, bankDepositRoutes
 
 // Simple test endpoint to verify middleware is working
 app.get('/api/test', (req, res) => {
-    console.log('🔥 Test endpoint hit - req.user:', req.user ? 'authenticated' : 'not authenticated');
+    console.log('Test endpoint hit - req.user:', req.user ? 'authenticated' : 'not authenticated');
     res.json({
         message: 'Test endpoint working',
         user: req.user ? req.user.username : 'anonymous',
@@ -205,7 +205,7 @@ const SSL_CERT_PATH = process.env.SSL_CERT_PATH || null;
 function startServer() {
     // Start HTTP server
     app.listen(PORT, HOST, () => {
-        console.log(`🌊 Code Aqua ERP — HTTP Server running on http://${HOST}:${PORT}`);
+        console.log(`Code Aqua ERP — HTTP Server running on http://${HOST}:${PORT}`);
     });
 
     // Start HTTPS server if SSL certificates are available
@@ -221,7 +221,7 @@ function startServer() {
 
             const httpsServer = https.createServer(credentials, app);
             httpsServer.listen(HTTPS_PORT, HOST, () => {
-                console.log(`🔒 Code Aqua ERP — HTTPS Server running on https://${HOST}:${HTTPS_PORT}`);
+                console.log(`Code Aqua ERP — HTTPS Server running on https://${HOST}:${HTTPS_PORT}`);
             });
         } catch (error) {
             console.error('SSL certificates not found or invalid. Running HTTP only.');
@@ -235,7 +235,7 @@ function startServer() {
 
 if (process.env.NODE_ENV === 'development') {
     dbModels.sequelize.sync({ alter: true }).then(() => {
-        console.log('🌊 Code Aqua ERP — Database synced (development mode)');
+        console.log('Code Aqua ERP — Database synced (development mode)');
         startServer();
     });
 } else {
