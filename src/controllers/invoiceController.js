@@ -19,7 +19,8 @@ const {
     ReceiptCreditNote,
     PaymentType,
     CreditNote,
-    CustomerReturn
+    CustomerReturn,
+    AccountCategory
 } = require('../models');
 const { Op } = require('sequelize');
 const TransactionService = require('../utils/transactionService');
@@ -687,8 +688,49 @@ exports.approveOrRejectInvoice = async (req, res) => {
                             { name: { [Op.like]: '%Income%' } },
                             { ledgerCode: { [Op.like]: '%SALES%' } }
                         ]
-                    }
+                    },
+                    transaction: t
                 });
+
+                if (!salesAccount) {
+                    const salesCategory = await AccountCategory.findOne({
+                        where: { name: 'Operating Income' },
+                        transaction: t
+                    });
+
+                    if (salesCategory && salesCategory.code) {
+                        const prefixCode = salesCategory.code;
+                        const lastAccount = await LedgerAccount.findOne({
+                            where: {
+                                accountCategoryId: salesCategory.id,
+                                ledgerCode: { [Op.like]: `${prefixCode}00%` }
+                            },
+                            order: [['ledgerCode', 'DESC']],
+                            attributes: ['ledgerCode'],
+                            transaction: t
+                        });
+
+                        let nextNumber = 1;
+                        if (lastAccount && lastAccount.ledgerCode) {
+                            const numericPart = lastAccount.ledgerCode.substring(5);
+                            const lastNumber = parseInt(numericPart, 10);
+                            if (!isNaN(lastNumber)) {
+                                nextNumber = lastNumber + 1;
+                            }
+                        }
+                        const ledgerCode = `${prefixCode}${String(nextNumber).padStart(5, '0')}`;
+
+                        salesAccount = await LedgerAccount.create({
+                            ledgerCode,
+                            name: 'Sales Income',
+                            description: 'Auto-generated sales income account',
+                            accountTypeId: salesCategory.accountTypeId,
+                            accountCategoryId: salesCategory.id,
+                            ledgerType: 'SYSTEM',
+                            createdBy: currentUserId
+                        }, { transaction: t });
+                    }
+                }
 
                 let taxAccount = null;
                 if (invoice.taxAmount > 0) {
@@ -699,17 +741,59 @@ exports.approveOrRejectInvoice = async (req, res) => {
                                 { name: { [Op.like]: '%VAT%' } },
                                 { ledgerCode: { [Op.like]: '%20300002%' } }
                             ]
-                        }
+                        },
+                        transaction: t
                     });
+
+                    if (!taxAccount) {
+                        const taxCategory = await AccountCategory.findOne({
+                            where: { name: 'Current Liabilities' },
+                            transaction: t
+                        });
+
+                        if (taxCategory && taxCategory.code) {
+                            const prefixCode = taxCategory.code;
+                            const lastAccount = await LedgerAccount.findOne({
+                                where: {
+                                    accountCategoryId: taxCategory.id,
+                                    ledgerCode: { [Op.like]: `${prefixCode}00%` }
+                                },
+                                order: [['ledgerCode', 'DESC']],
+                                attributes: ['ledgerCode'],
+                                transaction: t
+                            });
+
+                            let nextNumber = 1;
+                            if (lastAccount && lastAccount.ledgerCode) {
+                                const numericPart = lastAccount.ledgerCode.substring(5);
+                                const lastNumber = parseInt(numericPart, 10);
+                                if (!isNaN(lastNumber)) {
+                                    nextNumber = lastNumber + 1;
+                                }
+                            }
+                            const ledgerCode = `${prefixCode}${String(nextNumber).padStart(5, '0')}`;
+
+                            taxAccount = await LedgerAccount.create({
+                                ledgerCode,
+                                name: 'VAT Payable',
+                                description: 'Auto-generated tax payable account',
+                                accountTypeId: taxCategory.accountTypeId,
+                                accountCategoryId: taxCategory.id,
+                                ledgerType: 'SYSTEM',
+                                createdBy: currentUserId
+                            }, { transaction: t });
+                        }
+                    }
                 }
 
-                // If accounts not found, get first available accounts
+                // If accounts not found, get first available accounts (fallback)
                 if (!customerAccount) {
-                    customerAccount = await LedgerAccount.findOne();
+                    customerAccount = await LedgerAccount.findOne({ transaction: t });
                 }
                 if (!salesAccount) {
                     salesAccount = await LedgerAccount.findOne({
-                        where: { id: { [Op.ne]: customerAccount?.id } }
+                        where: { id: { [Op.ne]: customerAccount?.id } },
+                        transaction: t
                     });
                 }
 
