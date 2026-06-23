@@ -235,13 +235,13 @@ exports.getAllSalesOrders = async (req, res) => {
                 attributes: ['id', 'status'],
                 where: { status: deliveryOrderStatus },
                 required: true,
-              }
+            }
             : {
                 model: DeliveryOrder,
                 as: 'DeliveryOrders',
                 attributes: ['id', 'status'],
                 required: false,
-              };
+            };
 
         const queryOptions = {
             where: whereClause,
@@ -320,6 +320,44 @@ exports.getAllSalesOrders = async (req, res) => {
 
         const totalPages = usePagination ? Math.ceil(count / limitNum) : 1;
 
+        // ── Calculate Summary Stats ───────────────────────────────────────────
+        const allQueryOptions = {
+            where: whereClause,
+            include: [
+                { model: Customer, attributes: [] },
+                {
+                    model: User,
+                    as: 'SalesPerson',
+                    attributes: [],
+                    ...(salesPersonId && salesPersonId !== 'ALL'
+                        ? { where: { id: salesPersonId }, required: true }
+                        : {})
+                },
+                deliveryOrderInclude,
+            ],
+            attributes: ['id', 'status', 'totalAmount'],
+            distinct: true,
+        };
+        const allFilteredOrders = await SalesOrder.findAll(allQueryOptions);
+
+        let totalAmountSummary = 0;
+        let totalApprovedCount = 0;
+        let totalApprovedAmount = 0;
+        let totalPendingCount = 0;
+        let totalPendingAmount = 0;
+
+        for (const o of allFilteredOrders) {
+            const amt = Number(o.totalAmount) || 0;
+            totalAmountSummary += amt;
+            if (o.status === 'Approved') {
+                totalApprovedCount++;
+                totalApprovedAmount += amt;
+            } else if (o.status === 'Pending') {
+                totalPendingCount++;
+                totalPendingAmount += amt;
+            }
+        }
+
         res.json({
             data: transformedSalesOrders,
             pagination: {
@@ -329,6 +367,13 @@ exports.getAllSalesOrders = async (req, res) => {
                 totalPages,
                 hasNextPage: usePagination ? pageNum < totalPages : false,
                 hasPrevPage: usePagination ? pageNum > 1 : false,
+            },
+            summary: {
+                totalAmount: totalAmountSummary,
+                totalApprovedCount,
+                totalApprovedAmount,
+                totalPendingCount,
+                totalPendingAmount
             }
         });
     } catch (error) {
