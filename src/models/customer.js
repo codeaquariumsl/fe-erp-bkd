@@ -35,6 +35,10 @@ const Customer = sequelize.define('Customer', {
         type: DataTypes.STRING,
         allowNull: true,
     },
+    contactNumber2: {
+        type: DataTypes.STRING,
+        allowNull: true,
+    },
     email: {
         type: DataTypes.STRING,
         allowNull: true,
@@ -64,6 +68,11 @@ const Customer = sequelize.define('Customer', {
     creditPeriod: {
         type: DataTypes.INTEGER,
         allowNull: true,
+    },
+    paymentMethod: {
+        type: DataTypes.ENUM('Cash on delivery', 'Bill to bill', 'One month credit', '14 days credit', '7 days credit'),
+        allowNull: false,
+        defaultValue: 'Cash on delivery',
     },
     isTaxInclusive: {
         type: DataTypes.BOOLEAN,
