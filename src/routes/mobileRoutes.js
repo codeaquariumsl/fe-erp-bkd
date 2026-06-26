@@ -18,6 +18,12 @@ router.get('/dashboard/:salespersonId', mobileController.getDashboardBySalespers
 router.get('/sales-orders/:salespersonId', mobileController.getSalesOrdersBySalespersonId);
 
 /**
+ * @route   GET /api/mobile/invoices/:salespersonId
+ * @desc    Get genuine invoices for a salesperson
+ */
+router.get('/invoices/:salespersonId', mobileController.getInvoicesBySalespersonId);
+
+/**
  * @route   GET /api/mobile/customers/:salespersonId
  * @desc    Get customers assigned to a salesperson
  */

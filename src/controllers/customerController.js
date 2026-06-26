@@ -7,6 +7,25 @@ exports.createCustomer = async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const data = { ...req.body }; // Create a copy to avoid modifying const
+        
+        // Parse fields from multipart/form-data strings
+        if (data.isTaxInclusive === 'true') data.isTaxInclusive = true;
+        if (data.isTaxInclusive === 'false') data.isTaxInclusive = false;
+        if (data.parentId === 'null' || data.parentId === '') data.parentId = null;
+        else if (data.parentId) data.parentId = parseInt(data.parentId, 10);
+        
+        if (data.routeId === 'null' || data.routeId === '') data.routeId = null;
+        else if (data.routeId) data.routeId = parseInt(data.routeId, 10);
+        
+        if (data.locationId === 'null' || data.locationId === '') data.locationId = null;
+        else if (data.locationId) data.locationId = parseInt(data.locationId, 10);
+        
+        if (data.creditLimit) data.creditLimit = parseFloat(data.creditLimit);
+        if (data.creditPeriod) data.creditPeriod = parseInt(data.creditPeriod, 10);
+        if (data.discountRate) data.discountRate = parseFloat(data.discountRate);
+        if (data.latitude) data.latitude = parseFloat(data.latitude);
+        if (data.longitude) data.longitude = parseFloat(data.longitude);
+
         const currentUserId = (req.user && req.user.id) || (req.body.user && req.body.user.id) || null;
         console.log("Creating customer with data:", data);
 
@@ -25,11 +44,12 @@ exports.createCustomer = async (req, res) => {
         }
 
         if (!data.locationId) {
-            await t.rollback();
-            return res.status(400).json({
-                error: 'Validation Error',
-                message: 'locationId is required. Please provide a locationId or a valid routeId.'
-            });
+            data.locationId = 1;
+            // await t.rollback();
+            // return res.status(400).json({
+            //     error: 'Validation Error',
+            //     message: 'locationId is required. Please provide a locationId or a valid routeId.'
+            // });
         }
 
         // 1. Find the Customer Control Account
@@ -150,6 +170,7 @@ exports.createCustomer = async (req, res) => {
 
         res.status(201).json({ customer: newCustomer, user: userResponse });
     } catch (error) {
+
         if (t && !t.finished) await t.rollback();
         // ... (rest of error handling)
 
@@ -338,6 +359,25 @@ exports.updateCustomer = async (req, res) => {
     const t = await sequelize.transaction();
     try {
         const data = { ...req.body }; // Create a copy to avoid modifying req.body
+        
+        // Parse fields from multipart/form-data strings
+        if (data.isTaxInclusive === 'true') data.isTaxInclusive = true;
+        if (data.isTaxInclusive === 'false') data.isTaxInclusive = false;
+        if (data.parentId === 'null' || data.parentId === '') data.parentId = null;
+        else if (data.parentId) data.parentId = parseInt(data.parentId, 10);
+        
+        if (data.routeId === 'null' || data.routeId === '') data.routeId = null;
+        else if (data.routeId) data.routeId = parseInt(data.routeId, 10);
+        
+        if (data.locationId === 'null' || data.locationId === '') data.locationId = null;
+        else if (data.locationId) data.locationId = parseInt(data.locationId, 10);
+        
+        if (data.creditLimit) data.creditLimit = parseFloat(data.creditLimit);
+        if (data.creditPeriod) data.creditPeriod = parseInt(data.creditPeriod, 10);
+        if (data.discountRate) data.discountRate = parseFloat(data.discountRate);
+        if (data.latitude) data.latitude = parseFloat(data.latitude);
+        if (data.longitude) data.longitude = parseFloat(data.longitude);
+
         const customer = await Customer.findByPk(req.params.id, { transaction: t });
         if (!customer) {
             await t.rollback();
