@@ -1098,3 +1098,272 @@ exports.getSalesItemsByCustomer = async (req, res) => {
         });
     }
 };
+
+// Get sales items for mobile with active items, custom customer pricing and stock details
+exports.getSalesItemsByCustomerMobile = async (req, res) => {
+    try {
+        const { customerId, salespersonId, locationId = 1 } = req.body;
+        console.log("Mobile items request:", customerId, salespersonId, locationId);
+
+        // Validate required parameters
+        if (!customerId) {
+            return res.status(400).json({
+                success: false,
+                error: 'Customer ID is required'
+            });
+        }
+
+        // Get customer information
+        const customer = await Customer.findByPk(customerId, {
+            attributes: ['id', 'name', 'type', 'parentId']
+        });
+
+        if (!customer) {
+            return res.status(404).json({
+                success: false,
+                error: 'Customer not found'
+            });
+        }
+
+        // Fetch all active items
+        const items = await Item.findAll({
+            where: { status: 'active' },
+            include: [
+                {
+                    model: Category,
+                    as: 'Category',
+                    attributes: ['id', 'name', 'itemType']
+                }
+            ],
+            attributes: [
+                'id', 'name', 'sku', 'barcode', 'unit', 'sellingPrice', 'minSellingPrice', 'weight', 'itemsPerBox', 'image'
+            ]
+        });
+
+        // Fetch customer item codes (for codes fallback)
+        const customerIds = [customerId];
+        if (customer.parentId) {
+            customerIds.push(customer.parentId);
+        }
+        const customerItemCodes = await CustomerItemCode.findAll({
+            where: {
+                customerId: { [Op.in]: customerIds },
+                isActive: true,
+                ...(locationId ? { locationId } : {})
+            }
+        });
+
+        // Index customer item codes by itemId for quick lookup
+        const codeMap = {}; // itemId -> customerItemCode instance
+        customerItemCodes.forEach(cic => {
+            // Priority: direct customer code overrides parent customer code
+            if (!codeMap[cic.itemId] || cic.customerId === customerId) {
+                codeMap[cic.itemId] = cic;
+            }
+        });
+
+        // Fetch category discounts for this customer and parent
+        const categoryDiscounts = await CustomerCategoryDiscount.findAll({
+            where: { customerId: { [Op.in]: [customerId, customer.parentId].filter(Boolean) } }
+        });
+
+        const discountMap = {}; // categoryId -> discountPercentage
+        categoryDiscounts.sort((a, b) => {
+            if (a.customerId === customerId) return 1;
+            if (b.customerId === customerId) return -1;
+            return 0;
+        });
+        categoryDiscounts.forEach(d => {
+            discountMap[d.categoryId] = d.discountPercentage;
+        });
+
+        // Fetch custom customer prices (ItemPrice) for this customer and location
+        const itemPrices = await ItemPrice.findAll({
+            where: {
+                customerId: customerId,
+                status: 'Active',
+                ...(locationId ? { locationId } : {})
+            }
+        });
+        const customPriceMap = {}; // itemId -> custom price
+        itemPrices.forEach(ip => {
+            customPriceMap[ip.itemId] = ip.price;
+        });
+
+        // Fetch all active stocks for all items in one query to be efficient
+        const activeStocks = await Stock.findAll({
+            where: {
+                itemId: { [Op.in]: items.map(it => it.id) },
+                status: 'Active',
+                ...(locationId ? { locationId } : {})
+            },
+            attributes: [
+                'id', 'itemId', 'availableQty', 'weight', 'status',
+                'locationId', 'storeId', 'createdAt', 'updatedAt'
+            ]
+        });
+
+        // Group stocks by itemId
+        const stockMap = {}; // itemId -> array of stocks
+        activeStocks.forEach(st => {
+            if (!stockMap[st.itemId]) {
+                stockMap[st.itemId] = [];
+            }
+            stockMap[st.itemId].push(st);
+        });
+
+        // Fetch locations for stock mapping
+        const locationIds = [...new Set(activeStocks.map(stock => stock.locationId).filter(Boolean))];
+        const locations = {};
+        if (locationIds.length > 0) {
+            const locationRecords = await Location.findAll({
+                where: { id: { [Op.in]: locationIds } },
+                attributes: ['id', 'name']
+            });
+            locationRecords.forEach(loc => {
+                locations[loc.id] = { id: loc.id, name: loc.name };
+            });
+        }
+
+        // Process all active items
+        const itemsWithStock = [];
+
+        for (const item of items) {
+            // Find customer item code or fallback to SKU/Barcode
+            const cic = codeMap[item.id];
+            const customerItemCodeObj = {
+                id: cic ? cic.id : 0,
+                code: cic ? cic.code : (item.sku || item.barcode || 'N/A'),
+                customerId: cic ? cic.customerId : customerId,
+                isFromParent: cic ? cic.customerId !== customerId : false,
+                locationId: cic ? cic.locationId : (locationId || 1)
+            };
+
+            // Custom Customer Pricing logic
+            const hasCustomPrice = customPriceMap[item.id] !== undefined;
+            const customPrice = customPriceMap[item.id];
+
+            const finalSellingPrice = hasCustomPrice ? customPrice : item.sellingPrice;
+            // If custom price, set minSellingPrice to the same value so BDM cannot discount it
+            const finalMinSellingPrice = hasCustomPrice ? customPrice : (item.minSellingPrice || 0);
+            // If custom price, set discount percentage to 0
+            const finalDiscountPercentage = hasCustomPrice ? 0 : ((item.Category && discountMap[item.Category.id]) || 0);
+
+            // Stocks
+            const availableStock = stockMap[item.id] || [];
+            const totalAvailableQuantity = availableStock.reduce(
+                (sum, stock) => Number(sum) + Number(stock.availableQty || 0), 0
+            );
+            const totalWeight = availableStock.reduce(
+                (sum, stock) => Number(sum) + Number(stock.weight || 0), 0
+            );
+            const primaryStock = availableStock.length > 0 ? availableStock[0] : null;
+
+            itemsWithStock.push({
+                customerItemCode: customerItemCodeObj,
+                item: {
+                    id: item.id,
+                    name: item.name,
+                    sku: item.sku,
+                    barcode: item.barcode,
+                    unit: item.unit,
+                    sellingPrice: finalSellingPrice,
+                    minSellingPrice: finalMinSellingPrice,
+                    temperature: 0,
+                    weight: item.weight,
+                    itemsPerBox: item.itemsPerBox,
+                    category: item.Category,
+                    discountPercentage: finalDiscountPercentage,
+                    isTaxInclusive: false,
+                    flags: {
+                        allowsMinus: false,
+                        isProductionRawMaterial: false
+                    }
+                },
+                availability: {
+                    totalAvailableQuantity,
+                    totalWeight,
+                    totalStockRecords: availableStock.length,
+                    hasStock: totalAvailableQuantity > 0,
+                    allowsNegativeStock: false
+                },
+                primaryStock: primaryStock ? {
+                    id: primaryStock.id,
+                    availableQty: primaryStock.availableQty,
+                    weight: primaryStock.weight,
+                    status: primaryStock.status,
+                    locationId: primaryStock.locationId,
+                    storeId: primaryStock.storeId,
+                    location: locations[primaryStock.locationId] || null,
+                    createdAt: primaryStock.createdAt
+                } : null,
+                allStock: availableStock.map(stock => ({
+                    id: stock.id,
+                    availableQty: stock.availableQty,
+                    weight: stock.weight,
+                    status: stock.status,
+                    locationId: stock.locationId,
+                    storeId: stock.storeId,
+                    location: locations[stock.locationId] || null,
+                    createdAt: stock.createdAt,
+                    updatedAt: stock.updatedAt
+                })),
+                warnings: {
+                    noStock: totalAvailableQuantity === 0,
+                    restrictedSale: false,
+                    isRawMaterial: false,
+                    lowStock: totalAvailableQuantity > 0 && totalAvailableQuantity < 10
+                }
+            });
+        }
+
+        // Sort items: Items with customer-specific item codes first, then own items first, then alphabetical by code
+        itemsWithStock.sort((a, b) => {
+            const aHasCode = a.customerItemCode.id > 0;
+            const bHasCode = b.customerItemCode.id > 0;
+            if (aHasCode !== bHasCode) {
+                return aHasCode ? -1 : 1; // Real codes first
+            }
+            if (a.customerItemCode.isFromParent !== b.customerItemCode.isFromParent) {
+                return a.customerItemCode.isFromParent ? 1 : -1; // Own items first
+            }
+            return a.customerItemCode.code.localeCompare(b.customerItemCode.code);
+        });
+
+        // Summary details
+        const summary = {
+            totalItems: itemsWithStock.length,
+            itemsWithStock: itemsWithStock.filter(item => item.availability.hasStock).length,
+            itemsWithoutStock: itemsWithStock.filter(item => !item.availability.hasStock).length,
+            lowStockItems: itemsWithStock.filter(item => item.warnings.lowStock).length,
+            parentItemCodes: itemsWithStock.filter(item => item.customerItemCode.isFromParent).length,
+            totalAvailableQuantity: itemsWithStock.reduce((sum, item) => sum + item.availability.totalAvailableQuantity, 0),
+            totalWeight: itemsWithStock.reduce((sum, item) => sum + item.availability.totalWeight, 0)
+        };
+
+        res.json({
+            success: true,
+            data: itemsWithStock,
+            summary,
+            customer: {
+                id: customer.id,
+                name: customer.name,
+                type: customer.type,
+                hasParent: !!customer.parentId
+            },
+            filters: {
+                customerId,
+                salespersonId,
+                locationId
+            }
+        });
+
+    } catch (error) {
+        console.error('Error fetching mobile sales items:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error while fetching mobile sales items',
+            message: error.message
+        });
+    }
+};

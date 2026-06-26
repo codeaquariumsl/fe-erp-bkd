@@ -4,6 +4,7 @@ const salesOrderController = require('../controllers/salesOrderController');
 
 router.post('/', salesOrderController.createSalesOrder);
 router.post('/items-by-customer', salesOrderController.getSalesItemsByCustomer);
+router.post('/items-by-customer-mobile', salesOrderController.getSalesItemsByCustomerMobile);
 router.get('/', salesOrderController.getAllSalesOrders);
 router.get('/:id', salesOrderController.getSalesOrderById);
 router.get('/customer/:customerId', salesOrderController.getSalesOrdersByCustomerId);
