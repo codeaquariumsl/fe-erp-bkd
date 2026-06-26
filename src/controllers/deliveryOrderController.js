@@ -64,16 +64,16 @@ exports.createDeliveryOrder = async (req, res) => {
 exports.getAllDeliveryOrders = async (req, res) => {
     try {
         const { BatchItem, Batch } = require('../models');
-        const { 
-            page = 1, 
-            limit = 10, 
-            locationId, 
-            search, 
-            status, 
-            customerId, 
-            driverId, 
-            routeId, 
-            date 
+        const {
+            page = 1,
+            limit = 10,
+            locationId,
+            search,
+            status,
+            customerId,
+            driverId,
+            routeId,
+            date
         } = req.query;
 
         const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -519,16 +519,16 @@ exports.approveOrRejectDeliveryOrder = async (req, res) => {
             const InvoiceItem = require('../models/invoiceItem');
 
             // Check if an invoice already exists for this delivery order
-            const existingInvoice = await Invoice.findOne({ 
-                where: { deliveryOrderId: order.id }, 
-                transaction: t 
+            const existingInvoice = await Invoice.findOne({
+                where: { deliveryOrderId: order.id },
+                transaction: t
             });
 
             if (existingInvoice) {
                 await t.commit();
-                return res.status(200).json({ 
+                return res.status(200).json({
                     message: `Delivery Order approved. Invoice ${existingInvoice.invoiceNumber} already exists.`,
-                    order 
+                    order
                 });
             }
             const doItems = await DeliveryOrderItem.findAll({ where: { deliveryOrderId: order.id }, transaction: t });
@@ -562,7 +562,31 @@ exports.approveOrRejectDeliveryOrder = async (req, res) => {
                 }
             }
             total = subTotal + taxAmount;
-            let invoiceNumber = await generateDocumentNumber('INV-DO', locationId);
+            const currentMonth = String(new Date().getMonth() + 1).padStart(2, '0');
+            const currentYearStr = String(new Date().getFullYear()).slice(2);
+            const prefix = `${currentYearStr}${currentMonth}_CCPL_`;
+
+            const lastRecord = await Invoice.findOne({
+                where: {
+                    invoiceNumber: {
+                        [Op.like]: `${prefix}%`
+                    }
+                },
+                order: [['id', 'DESC']],
+                transaction: t
+            });
+
+            let nextNumber = '00001';
+            if (lastRecord && lastRecord.invoiceNumber) {
+                const parts = lastRecord.invoiceNumber.split('_');
+                if (parts.length === 3) {
+                    const lastNum = parseInt(parts[2], 10);
+                    if (!isNaN(lastNum)) {
+                        nextNumber = String(lastNum + 1).padStart(5, '0');
+                    }
+                }
+            }
+            const invoiceNumber = `${prefix}${nextNumber}`;
             const invoice = await Invoice.create({
                 invoiceNumber,
                 customerId,
@@ -656,6 +680,7 @@ exports.approveOrRejectDeliveryOrder = async (req, res) => {
 
         res.json({ message: `Delivery Order ${status.toLowerCase()}`, order });
     } catch (error) {
+        console.log(error);
         await t.rollback();
         res.status(400).json({ error: error.message });
     }
