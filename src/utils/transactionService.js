@@ -265,6 +265,97 @@ class TransactionService {
     }
 
     /**
+     * Log Invoice Cancellation Posting to Transaction Tables
+     */
+    static async logInvoiceCancellationTransaction(invoice, transactionDetails, userId) {
+        try {
+            // Validate required data first
+            if (!invoice || !invoice.id || !invoice.invoiceNumber) {
+                throw new Error('Invalid invoice data: missing id or invoiceNumber');
+            }
+            if (!Array.isArray(transactionDetails) || transactionDetails.length === 0) {
+                throw new Error('Invalid transaction details: must be non-empty array');
+            }
+
+            // Ensure userId is valid
+            if (!userId || isNaN(parseInt(userId))) {
+                console.warn('Warning: Invalid userId for transaction logging:', userId);
+                userId = 1; // Default to system user
+            }
+
+            const transactionNumber = await this.generateTransactionNumber();
+
+            // Calculate totals from transaction details
+            const totalDebit = transactionDetails.reduce((sum, detail) => sum + (parseFloat(detail.debitAmount) || 0), 0);
+            const totalCredit = transactionDetails.reduce((sum, detail) => sum + (parseFloat(detail.creditAmount) || 0), 0);
+
+            // Create transaction header
+            const headerData = {
+                transactionNumber,
+                transactionDate: new Date(),
+                transactionModule: 'INVOICE',
+                referenceModule: 'SALES',
+                referenceNumber: String(invoice.invoiceNumber || '').substring(0, 50),
+                referenceId: parseInt(invoice.id) || 0,
+                journalEntryId: null, // No journal entry
+                totalDebit: parseFloat(totalDebit.toFixed(2)),
+                totalCredit: parseFloat(totalCredit.toFixed(2)),
+                description: `Invoice Cancellation - ${invoice.invoiceNumber || 'N/A'} to Customer #${invoice.customerId || 0}`,
+                status: 'Posted',
+                createdBy: parseInt(userId) || 1
+            };
+
+            console.log('Creating TransactionHeader for cancellation with data:', {
+                transactionNumber: headerData.transactionNumber,
+                totalDebit: headerData.totalDebit,
+                totalCredit: headerData.totalCredit,
+                status: headerData.status,
+                createdBy: headerData.createdBy
+            });
+
+            const transactionHeader = await TransactionHeader.create(headerData);
+
+            if (!transactionHeader.id) {
+                throw new Error('TransactionHeader created but has no ID');
+            }
+
+            // Create transaction details
+            const detailsToCreate = [];
+            for (let i = 0; i < transactionDetails.length; i++) {
+                const detail = transactionDetails[i];
+
+                if (!detail.ledgerAccountId) {
+                    console.warn(`Warning: Transaction detail ${i} missing ledgerAccountId, skipping`);
+                    continue;
+                }
+
+                detailsToCreate.push({
+                    transactionHeaderId: transactionHeader.id,
+                    journalEntryLineId: null, // No journal entry line
+                    ledgerAccountId: parseInt(detail.ledgerAccountId),
+                    lineNumber: detail.lineNumber || (i + 1),
+                    debitAmount: parseFloat(detail.debitAmount) || 0.00,
+                    creditAmount: parseFloat(detail.creditAmount) || 0.00,
+                    description: String(detail.description || '').substring(0, 500),
+                    createdBy: parseInt(userId) || 1
+                });
+            }
+
+            if (detailsToCreate.length === 0) {
+                throw new Error('No valid transaction details to log after validation');
+            }
+
+            await TransactionDetail.bulkCreate(detailsToCreate);
+
+            console.log('Successfully logged invoice cancellation transaction:', transactionNumber);
+            return transactionHeader;
+        } catch (error) {
+            console.error('Transaction logging error for invoice cancellation:', error.message);
+            throw error;
+        }
+    }
+
+    /**
      * Log Bill Entry Posting to Transaction Tables
      */
     static async logBillEntryPosting(billEntry, journalEntry, journalLines, userId) {

@@ -915,6 +915,235 @@ exports.approveOrRejectInvoice = async (req, res) => {
     }
 };
 
+// Cancel Approved Invoice
+exports.cancelInvoice = async (req, res) => {
+    const t = await sequelize.transaction();
+    try {
+        const invoice = await Invoice.findByPk(req.params.id, {
+            include: [
+                {
+                    model: Customer,
+                    include: [{ model: LedgerAccount, as: 'LedgerAccount' }]
+                },
+                { model: InvoiceItem, include: [Item] },
+                { model: DeliveryOrder }
+            ],
+            transaction: t
+        });
+
+        if (!invoice) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Invoice not found' });
+        }
+
+        if (invoice.status !== 'Approved') {
+            await t.rollback();
+            return res.status(400).json({ error: `Only Approved invoices can be cancelled. Current status is ${invoice.status}` });
+        }
+
+        // Check for receipts linked to this invoice
+        const receiptCount = await ReceiptInvoice.count({
+            where: { invoiceId: invoice.id },
+            transaction: t
+        });
+
+        if (receiptCount > 0 || parseFloat(invoice.paidAmount) > 0) {
+            await t.rollback();
+            return res.status(400).json({
+                error: 'Cannot cancel invoice because it has associated receipts/payments.',
+                hasReceipts: true
+            });
+        }
+
+        const currentUserId = req.user && req.user.id ? req.user.id : null;
+        const { cancelReason } = req.body || {};
+
+        // 1. Update invoice status to Cancelled with reason
+        await invoice.update({
+            status: 'Cancelled',
+            cancelReason: cancelReason || 'No reason provided',
+            updatedBy: currentUserId
+        }, { transaction: t });
+
+        // 2. Reverse stock if deliveryOrder is linked
+        let stockReversed = false;
+        if (invoice.deliveryOrderId && invoice.DeliveryOrder) {
+            const { Stock, StockDetail } = require('../models');
+            const deliveryOrder = invoice.DeliveryOrder;
+
+            for (const item of invoice.InvoiceItems) {
+                if (item.qty > 0) {
+                    let lorryStock = await Stock.findOne({
+                        where: {
+                            itemId: item.itemId,
+                            lorryId: deliveryOrder.vehicleId,
+                            storeId: null
+                        },
+                        transaction: t,
+                        lock: t.LOCK.UPDATE
+                    });
+
+                    if (lorryStock) {
+                        await lorryStock.update({
+                            availableQty: lorryStock.availableQty + item.qty,
+                            updatedBy: currentUserId
+                        }, { transaction: t });
+
+                        await StockDetail.create({
+                            stockId: lorryStock.id,
+                            documentType: 'Delivery-Cancelled',
+                            documentId: invoice.deliveryOrderId,
+                            inOut: 'IN',
+                            qty: item.qty,
+                            date: new Date(),
+                            createdBy: currentUserId,
+                            updatedBy: currentUserId,
+                            remark: `Stock reversed due to cancellation of Invoice ${invoice.invoiceNumber}`
+                        }, { transaction: t });
+                    } else {
+                        // Create lorry stock if it didn't exist
+                        lorryStock = await Stock.create({
+                            itemId: item.itemId,
+                            lorryId: deliveryOrder.vehicleId,
+                            storeId: null,
+                            availableQty: item.qty,
+                            locationId: deliveryOrder.locationId || 1, // Fallback locationId
+                            createdBy: currentUserId,
+                            updatedBy: currentUserId
+                        }, { transaction: t });
+
+                        await StockDetail.create({
+                            stockId: lorryStock.id,
+                            documentType: 'Delivery-Cancelled',
+                            documentId: invoice.deliveryOrderId,
+                            inOut: 'IN',
+                            qty: item.qty,
+                            date: new Date(),
+                            createdBy: currentUserId,
+                            updatedBy: currentUserId,
+                            remark: `Stock reversed (new row) due to cancellation of Invoice ${invoice.invoiceNumber}`
+                        }, { transaction: t });
+                    }
+                }
+            }
+
+            // Update Delivery Order status back to 'Finalized' so it can be re-processed
+            await deliveryOrder.update({
+                status: 'Finalized',
+                updatedBy: currentUserId
+            }, { transaction: t });
+
+            stockReversed = true;
+            console.log(`Reversed stocks to lorry ${deliveryOrder.vehicleId} and updated DO ${deliveryOrder.id} status back to Finalized`);
+        }
+
+        // 3. Reverse financial transactions
+        let customerAccount = invoice.Customer?.LedgerAccount;
+        let salesAccount = await LedgerAccount.findOne({
+            where: {
+                [Op.or]: [
+                    { name: { [Op.like]: '%Sales%' } },
+                    { name: { [Op.like]: '%Income%' } },
+                    { ledgerCode: { [Op.like]: '%SALES%' } }
+                ]
+            },
+            transaction: t
+        });
+
+        let taxAccount = null;
+        if (invoice.taxAmount > 0) {
+            taxAccount = await LedgerAccount.findOne({
+                where: {
+                    [Op.or]: [
+                        { name: { [Op.like]: '%Vat 18% Payable%' } },
+                        { name: { [Op.like]: '%VAT%' } },
+                        { ledgerCode: { [Op.like]: '%20300002%' } }
+                    ]
+                },
+                transaction: t
+            });
+        }
+
+        // Fallbacks
+        if (!customerAccount) {
+            customerAccount = await LedgerAccount.findOne({ transaction: t });
+        }
+        if (!salesAccount) {
+            salesAccount = await LedgerAccount.findOne({
+                where: { id: { [Op.ne]: customerAccount?.id } },
+                transaction: t
+            });
+        }
+
+        let transactionLogged = false;
+        if (customerAccount && salesAccount) {
+            const transactionDetails = [];
+
+            // CR: Customer Receivable Account (reversing DR)
+            transactionDetails.push({
+                ledgerAccountId: customerAccount.id,
+                debitAmount: 0,
+                creditAmount: parseFloat(invoice.total),
+                description: `Reversal of Customer receivable for Cancelled Invoice ${invoice.invoiceNumber}`,
+                lineNumber: 1
+            });
+
+            // DR: Sales Income Account (reversing CR)
+            transactionDetails.push({
+                ledgerAccountId: salesAccount.id,
+                debitAmount: parseFloat(invoice.total) - (parseFloat(invoice.taxAmount) || 0),
+                creditAmount: 0,
+                description: `Reversal of Sales income for Cancelled Invoice ${invoice.invoiceNumber}`,
+                lineNumber: 2
+            });
+
+            // DR: Tax Payable Account (reversing CR)
+            if (invoice.taxAmount > 0 && taxAccount) {
+                transactionDetails.push({
+                    ledgerAccountId: taxAccount.id,
+                    debitAmount: parseFloat(invoice.taxAmount),
+                    creditAmount: 0,
+                    description: `Reversal of Sales tax payable for Cancelled Invoice ${invoice.invoiceNumber}`,
+                    lineNumber: 3
+                });
+            }
+
+            await t.commit();
+
+            try {
+                await TransactionService.logInvoiceCancellationTransaction(
+                    invoice,
+                    transactionDetails,
+                    currentUserId
+                );
+                transactionLogged = true;
+            } catch (logError) {
+                console.error('Warning: Failed to log cancellation transaction:', logError.message);
+            }
+        } else {
+            await t.commit();
+            console.warn('Warning: Could not log cancellation transaction because required ledger accounts were missing');
+        }
+
+        res.json({
+            message: 'Invoice cancelled successfully',
+            invoice: {
+                ...invoice.toJSON(),
+                status: 'Cancelled',
+                updatedBy: currentUserId
+            },
+            stockReversed,
+            transactionLogged
+        });
+    } catch (error) {
+        if (!t.finished) {
+            await t.rollback();
+        }
+        console.error('Invoice cancellation error:', error);
+        res.status(400).json({ error: error.message });
+    }
+};
+
 // Get all outstanding invoices report
 exports.getOutstandingInvoicesReport = async (req, res) => {
     try {

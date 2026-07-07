@@ -133,12 +133,33 @@ exports.createCustomer = async (req, res) => {
             console.log(`Assigned customer ${customer.id} to sales person ${currentUserId}`);
         }
 
-        // 5. if customer has a routeId, then push it to the route's customerIds array
+        // 5. if customer has a routeId, push customer.id into the route's customerIds JSON array
         if (route) {
-            let customerIds = route.customerIds || [];
-            if (!customerIds.includes(customer.id)) {
-                customerIds.push(customer.id);
-                await route.update({ customerIds }, { transaction: t });
+            let customerIds = Array.isArray(route.customerIds) ? route.customerIds : [];
+            const customerId = parseInt(customer.id);
+
+            // Normalize to integers and deduplicate (same pattern as updateCustomer)
+            customerIds = customerIds
+                .map(id => parseInt(id))
+                .filter(id => !isNaN(id));
+
+            if (!customerIds.includes(customerId)) {
+                customerIds.push(customerId);
+
+                // Use raw SQL + JSON.stringify — same approach as updateCustomer
+                // which reliably serializes arrays into MySQL JSON columns
+                await sequelize.query(
+                    'UPDATE routes SET customerIds = :customerIds WHERE id = :routeId',
+                    {
+                        replacements: {
+                            customerIds: JSON.stringify(customerIds),
+                            routeId: route.id
+                        },
+                        type: sequelize.QueryTypes.UPDATE,
+                        transaction: t
+                    }
+                );
+                console.log(`Added customer ${customerId} to route ${route.id}. Updated customerIds:`, customerIds);
             }
         }
 

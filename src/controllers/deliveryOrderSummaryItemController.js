@@ -1520,8 +1520,11 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
 
         console.log('Updated delivery order summary to dispatched:', summaryId);
 
-        // Update each delivery order summary item
-        const updatePromises = items.map(async (item) => {
+        // Update each delivery order summary item SEQUENTIALLY so each iteration
+        // reads the stock qty already decremented by the previous one (avoids
+        // the race condition where parallel reads all see the same stale qty).
+        const updateResults = [];
+        for (const item of items) {
             // Validate that the item belongs to this summary
             const summaryItem = await DeliveryOrderSummaryItem.findOne({
                 where: {
@@ -1539,7 +1542,8 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
             if (!summaryItem.releaseStoreId) {
                 summaryItem.releaseStoreId = 1;
             }
-            // Check stock availability at the release store
+            // Check stock availability at the release store.
+            // Because we are sequential, this always returns the latest committed qty.
             const releaseStoreStock = await Stock.findOne({
                 where: {
                     itemId: summaryItem.itemId,
@@ -1555,14 +1559,18 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
                 throw new Error(`Insufficient stock at release store: Available: ${availableStockQty}, Required: ${summaryItem.qty} for item ${summaryItem.itemId}`);
             }
 
-            // Deduct stock from release store and create StockDetail record
+            // Deduct stock — use sequelize.literal for an atomic decrement so
+            // concurrent requests (different summaries) cannot corrupt the value.
             await Stock.update(
                 {
-                    availableQty: availableStockQty - summaryItem.qty,
+                    availableQty: sequelize.literal(`availableQty - ${summaryItem.qty}`),
                     updatedBy: currentUserId
                 },
                 {
-                    where: { id: releaseStoreStock.id },
+                    where: {
+                        id: releaseStoreStock.id,
+                        availableQty: { [Op.gte]: summaryItem.qty } // safety guard
+                    },
                     transaction: t
                 }
             );
@@ -1649,17 +1657,16 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
                 console.log(`Transferred ${summaryItem.qty} of item ${summaryItem.itemId} to vehicle stock for vehicleId ${deliveryOrder.vehicleId}`);
             }
 
-            return {
+            updateResults.push({
                 itemId: item.id,
                 batchId: item.batchId,
                 summaryItemQty: summaryItem.qty,
                 releaseStoreId: summaryItem.releaseStoreId,
                 stockDeducted: summaryItem.qty,
                 updated: updatedCount > 0
-            };
-        });
+            });
+        }
 
-        const updateResults = await Promise.all(updatePromises);
 
         // Check if all delivery orders in this summary have all their items ready
         // and update delivery order status to 'Dispatched' if so

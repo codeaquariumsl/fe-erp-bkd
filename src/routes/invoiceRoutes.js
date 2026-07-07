@@ -12,5 +12,6 @@ router.get('/:id', invoiceController.getInvoiceById);
 router.put('/:id', invoiceController.updateInvoice);
 router.delete('/:id', invoiceController.deleteInvoice);
 router.patch('/:id/approve-reject', invoiceController.approveOrRejectInvoice);
+router.patch('/:id/cancel', invoiceController.cancelInvoice);
 
 module.exports = router;
