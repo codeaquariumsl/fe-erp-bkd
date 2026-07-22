@@ -26,6 +26,12 @@ const SalesOrderItem = sequelize.define('SalesOrderItem', {
         allowNull: false,
         defaultValue: false,
     },
+    freeIssueQty: {
+        type: DataTypes.INTEGER,
+        allowNull: false,
+        defaultValue: 0,
+        comment: 'Free issue quantity given for this item'
+    },
     discountedAmount: {
         type: DataTypes.FLOAT, allowNull: false,
         defaultValue: 0.0,

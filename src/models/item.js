@@ -141,6 +141,24 @@ const Item = sequelize.define('Item', {
         defaultValue: false,
         comment: 'Flag to indicate if the prices are tax inclusive'
     },
+    isFreeIssue: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+        comment: 'Flag to indicate if free issue promotion is active for this item'
+    },
+    freeIssuePerCount: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        defaultValue: 0,
+        comment: 'Purchased count trigger for free issue (e.g. 10)'
+    },
+    freeIssueCount: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        defaultValue: 0,
+        comment: 'Free issue count given per trigger count (e.g. 3)'
+    },
     status: {
         type: DataTypes.STRING,
         allowNull: false,

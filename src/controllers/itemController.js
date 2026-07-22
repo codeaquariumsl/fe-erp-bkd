@@ -42,6 +42,18 @@ exports.createItem = async (req, res) => {
             return res.status(400).json({ error: 'allowsMinus must be a boolean value' });
         }
 
+        if (data.isFreeIssue !== undefined && typeof data.isFreeIssue !== 'boolean') {
+            return res.status(400).json({ error: 'isFreeIssue must be a boolean value' });
+        }
+
+        if (data.freeIssuePerCount !== undefined && (!Number.isInteger(Number(data.freeIssuePerCount)) || Number(data.freeIssuePerCount) < 0)) {
+            return res.status(400).json({ error: 'Free issue per count must be a non-negative integer' });
+        }
+
+        if (data.freeIssueCount !== undefined && (!Number.isInteger(Number(data.freeIssueCount)) || Number(data.freeIssueCount) < 0)) {
+            return res.status(400).json({ error: 'Free issue count must be a non-negative integer' });
+        }
+
         // Generate SKU if not provided
         if (!data.sku) {
             try {
@@ -300,6 +312,9 @@ exports.getItemsWithSchedule = async (req, res) => {
                 color: item.color,
                 weight: item.weight,
                 sellingPrice: item.sellingPrice,
+                isFreeIssue: item.isFreeIssue || false,
+                freeIssuePerCount: item.freeIssuePerCount || 0,
+                freeIssueCount: item.freeIssueCount || 0,
                 stockQty: stock.reduce((total, s) => total + (s.availableQty || 0), 0),
                 Category: {
                     id: item.Category.id,
@@ -454,6 +469,9 @@ exports.getItemWithSchedule = async (req, res) => {
             weight: item.weight,
             barcode: item.barcode,
             sellingPrice: item.sellingPrice,
+            isFreeIssue: item.isFreeIssue || false,
+            freeIssuePerCount: item.freeIssuePerCount || 0,
+            freeIssueCount: item.freeIssueCount || 0,
             Category: {
                 id: item.Category.id,
                 name: item.Category.name,
@@ -543,6 +561,18 @@ exports.updateItem = async (req, res) => {
 
         if (data.allowsMinus !== undefined && typeof data.allowsMinus !== 'boolean') {
             return res.status(400).json({ error: 'allowsMinus must be a boolean value' });
+        }
+
+        if (data.isFreeIssue !== undefined && typeof data.isFreeIssue !== 'boolean') {
+            return res.status(400).json({ error: 'isFreeIssue must be a boolean value' });
+        }
+
+        if (data.freeIssuePerCount !== undefined && (!Number.isInteger(Number(data.freeIssuePerCount)) || Number(data.freeIssuePerCount) < 0)) {
+            return res.status(400).json({ error: 'Free issue per count must be a non-negative integer' });
+        }
+
+        if (data.freeIssueCount !== undefined && (!Number.isInteger(Number(data.freeIssueCount)) || Number(data.freeIssueCount) < 0)) {
+            return res.status(400).json({ error: 'Free issue count must be a non-negative integer' });
         }
 
         // Validate SKU if provided and different from current
