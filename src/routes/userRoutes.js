@@ -36,6 +36,7 @@ router.delete('/delete/:id', roleMiddleware(['admin']), userController.deleteUse
 router.put('/:id/password', userController.updatePassword);
 
 // Sales Person Customer Assignment
+router.post('/transfer-customers', userController.transferCustomers);
 router.post('/:id/customers', roleMiddleware(['admin', 'admin']), userController.assignCustomers);
 router.get('/:id/customers', userController.getAssignedCustomers);
 router.delete('/:id/customers/:customerId', roleMiddleware(['admin', 'admin']), userController.removeAssignedCustomer);

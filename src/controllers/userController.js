@@ -1,4 +1,4 @@
-const { User, Role, Permission, RolePermission, SalesPersonCustomer, Customer } = require('../models');
+const { User, Role, Permission, RolePermission, SalesPersonCustomer, Customer, sequelize } = require('../models');
 const Driver = require('../models/driver');
 const bcrypt = require('bcryptjs');
 
@@ -737,6 +737,93 @@ exports.removeAssignedCustomer = async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Error removing customer assignment',
+            error: error.message
+        });
+    }
+};
+
+// Transfer assigned customers from one sales person to another
+exports.transferCustomers = async (req, res) => {
+    const transaction = await sequelize.transaction();
+    try {
+        const { fromUserId, toUserId, customerIds } = req.body;
+        const currentUserId = req.user ? req.user.id : 1;
+
+        if (!fromUserId || !toUserId || !customerIds || !Array.isArray(customerIds) || customerIds.length === 0) {
+            await transaction.rollback();
+            return res.status(400).json({
+                success: false,
+                message: 'fromUserId, toUserId, and array of customerIds are required'
+            });
+        }
+
+        if (Number(fromUserId) === Number(toUserId)) {
+            await transaction.rollback();
+            return res.status(400).json({
+                success: false,
+                message: 'Source and target sales persons must be different'
+            });
+        }
+
+        // Verify users exist
+        const [fromUser, toUser] = await Promise.all([
+            User.findByPk(fromUserId),
+            User.findByPk(toUserId)
+        ]);
+
+        if (!fromUser || !toUser) {
+            await transaction.rollback();
+            return res.status(404).json({
+                success: false,
+                message: 'Source or Target sales person not found'
+            });
+        }
+
+        // 1. Remove assignments from source sales person
+        await SalesPersonCustomer.destroy({
+            where: {
+                userId: fromUserId,
+                customerId: customerIds
+            },
+            transaction
+        });
+
+        // 2. Check existing assignments for target sales person to avoid unique key conflict
+        const existingTargetAssignments = await SalesPersonCustomer.findAll({
+            where: {
+                userId: toUserId,
+                customerId: customerIds
+            },
+            transaction
+        });
+
+        const existingCustomerIds = existingTargetAssignments.map(a => a.customerId);
+        const newCustomerIds = customerIds.filter(id => !existingCustomerIds.includes(id));
+
+        // 3. Create assignments for target sales person
+        if (newCustomerIds.length > 0) {
+            const newAssignments = newCustomerIds.map(customerId => ({
+                userId: toUserId,
+                customerId: customerId,
+                createdBy: currentUserId,
+                assignedDate: new Date()
+            }));
+            await SalesPersonCustomer.bulkCreate(newAssignments, { transaction });
+        }
+
+        await transaction.commit();
+
+        res.status(200).json({
+            success: true,
+            message: `Successfully transferred ${customerIds.length} customer(s) to ${toUser.username || 'target sales person'}`
+        });
+
+    } catch (error) {
+        await transaction.rollback();
+        console.error('Error transferring customers:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error transferring customers',
             error: error.message
         });
     }

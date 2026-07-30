@@ -877,7 +877,8 @@ exports.getSalesItemsByCustomer = async (req, res) => {
                     attributes: [
                         'id', 'name', 'sku', 'barcode', 'unit', 'sellingPrice',
                         'doNotAllowDirectSale', 'allowsMinus', 'isProductionRawMaterial',
-                        'temperature', 'weight', 'itemsPerBox', 'isTaxInclusive'
+                        'temperature', 'weight', 'itemsPerBox', 'isTaxInclusive',
+                        'isFreeIssue', 'freeIssuePerCount', 'freeIssueCount'
                     ]
                 },
                 {
@@ -1008,6 +1009,9 @@ exports.getSalesItemsByCustomer = async (req, res) => {
                     category: item.Category,
                     discountPercentage: (item.Category && discountMap[item.Category.id]) || 0,
                     isTaxInclusive: item.isTaxInclusive,
+                    isFreeIssue: item.isFreeIssue || false,
+                    freeIssuePerCount: item.freeIssuePerCount || 0,
+                    freeIssueCount: item.freeIssueCount || 0,
                     flags: {
                         doNotAllowDirectSale: item.doNotAllowDirectSale,
                         allowsMinus: item.allowsMinus,
