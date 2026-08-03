@@ -11,6 +11,8 @@ exports.createCustomer = async (req, res) => {
         // Parse fields from multipart/form-data strings
         if (data.isTaxInclusive === 'true') data.isTaxInclusive = true;
         if (data.isTaxInclusive === 'false') data.isTaxInclusive = false;
+        if (data.isHighPotential === 'true') data.isHighPotential = true;
+        if (data.isHighPotential === 'false') data.isHighPotential = false;
         if (data.parentId === 'null' || data.parentId === '') data.parentId = null;
         else if (data.parentId) data.parentId = parseInt(data.parentId, 10);
         
@@ -384,6 +386,8 @@ exports.updateCustomer = async (req, res) => {
         // Parse fields from multipart/form-data strings
         if (data.isTaxInclusive === 'true') data.isTaxInclusive = true;
         if (data.isTaxInclusive === 'false') data.isTaxInclusive = false;
+        if (data.isHighPotential === 'true') data.isHighPotential = true;
+        if (data.isHighPotential === 'false') data.isHighPotential = false;
         if (data.parentId === 'null' || data.parentId === '') data.parentId = null;
         else if (data.parentId) data.parentId = parseInt(data.parentId, 10);
         

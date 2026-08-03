@@ -112,6 +112,20 @@ const Customer = sequelize.define('Customer', {
     longitude: {
         type: DataTypes.DECIMAL(11, 8),
         allowNull: true,
+    },
+    isHighPotential: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false,
+        comment: 'Flag to indicate if the customer is high potential'
+    },
+    customerInterest: {
+        type: DataTypes.STRING,
+        allowNull: true,
+    },
+    notInterestedReason: {
+        type: DataTypes.STRING,
+        allowNull: true,
     }
 }, {
     timestamps: true,
