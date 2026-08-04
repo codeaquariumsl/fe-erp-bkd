@@ -44,6 +44,11 @@ const Route = sequelize.define('Route', {
         type: DataTypes.INTEGER,
         allowNull: true,
     },
+    salesPersonId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        comment: 'ID of the sales person assigned to this route'
+    },
     customerIds: {
         type: DataTypes.JSON,
         allowNull: true,

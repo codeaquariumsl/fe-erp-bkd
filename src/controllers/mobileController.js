@@ -15,6 +15,9 @@ const {
     Vehicle,
     InvoiceItem
 } = require('../models');
+const DeliveryOrder = require('../models/deliveryOrder');
+const DeliveryOrderItem = require('../models/deliveryOrderItem');
+const Driver = require('../models/driver');
 const { Op } = require('sequelize');
 
 /**
@@ -25,78 +28,57 @@ exports.getDashboardBySalespersonId = async (req, res) => {
         const { salespersonId } = req.params;
         const { startDate, endDate, routeId } = req.query;
 
+        console.log("salespersonId", salespersonId);
+        console.log("routeId", routeId);
+
         // Date filter setup
         let dateFilter = {};
         if (startDate && endDate) {
             const start = new Date(startDate);
             start.setHours(0, 0, 0, 0);
-
             const end = new Date(endDate);
             end.setHours(23, 59, 59, 999);
-
-            dateFilter = {
-                [Op.between]: [start, end]
-            };
+            dateFilter = { [Op.between]: [start, end] };
         }
 
-        // Determine resolvedRouteId (fallback to active day route if query routeId is not provided)
-        const resolvedRouteId = routeId;
-
-        // Retrieve route customer IDs if resolvedRouteId is resolved
-        let routeCustomerIds = null;
-        if (resolvedRouteId) {
-            const route = await Route.findByPk(resolvedRouteId);
-            routeCustomerIds = route && Array.isArray(route.customerIds) ? route.customerIds : [];
-        }
-
-        // 1. Get assigned customers count (only active customers)
-        const customerWhere = {
-            status: 'active'
-        };
-        if (routeCustomerIds !== null) {
-            customerWhere.id = { [Op.in]: routeCustomerIds };
-        }
+        // ------------------------------------------------------------------
+        // 1. Customer count — active customers within route
+        // ------------------------------------------------------------------
         const customerCount = await Customer.count({
-            where: customerWhere,
-            include: [{
-                model: SalesPersonCustomer,
-                as: 'SalesPeople',
-                where: { userId: salespersonId },
-                required: true
-            }]
+            where: { status: 'active', routeId: routeId }
         });
 
-        // 2a. Sales Orders — Approved count (with optional date filter)
-        const soApprovedWhere = { idSalesPerson: salespersonId, status: 'Approved' };
+        // ------------------------------------------------------------------
+        // 2a & 2b. Sales Orders count — Approved / Pending
+        // ------------------------------------------------------------------
+        const soApprovedWhere = { status: 'Approved' };
         if (startDate && endDate) soApprovedWhere.orderDate = dateFilter;
         const salesOrderApprovedCount = await SalesOrder.count({
             where: soApprovedWhere,
-            include: routeCustomerIds !== null ? [{ model: Customer, where: { id: { [Op.in]: routeCustomerIds } }, required: true }] : []
+            include: [{ model: Customer, where: { routeId: routeId }, required: true }]
         });
 
-        // 2b. Sales Orders — Pending count (with optional date filter)
-        const soPendingWhere = { idSalesPerson: salespersonId, status: 'Pending' };
+        const soPendingWhere = { status: 'Pending' };
         if (startDate && endDate) soPendingWhere.orderDate = dateFilter;
         const salesOrderPendingCount = await SalesOrder.count({
             where: soPendingWhere,
-            include: routeCustomerIds !== null ? [{ model: Customer, where: { id: { [Op.in]: routeCustomerIds } }, required: true }] : []
+            include: [{ model: Customer, where: { routeId: routeId }, required: true }]
         });
 
-        // 3. Get Invoice Data for this salesperson (non-cancelled)
+        // ------------------------------------------------------------------
+        // 3. All non-cancelled invoices for sales value / outstanding / overdue
+        // ------------------------------------------------------------------
         const invoiceWhere = {
-            idSalesPerson: salespersonId,
             status: { [Op.ne]: 'Cancelled' }
         };
-        if (startDate && endDate) {
-            invoiceWhere.invoiceDate = dateFilter;
-        }
+        if (startDate && endDate) invoiceWhere.invoiceDate = dateFilter;
 
         const invoices = await Invoice.findAll({
             where: invoiceWhere,
             include: [{
                 model: Customer,
-                where: routeCustomerIds !== null ? { id: { [Op.in]: routeCustomerIds } } : {},
-                required: routeCustomerIds !== null
+                where: { routeId: routeId },
+                required: true
             }]
         });
 
@@ -104,89 +86,72 @@ exports.getDashboardBySalespersonId = async (req, res) => {
         let totalOutstandingValue = 0;
         let totalOverdueValue = 0;
 
-        // 4. Approved-invoice specific: collection (paid) & outstanding (unpaid)
-        const approvedInvoiceWhere = {
-            idSalesPerson: salespersonId,
-            status: 'Approved'
-        };
-        if (startDate && endDate) {
-            approvedInvoiceWhere.invoiceDate = dateFilter;
-        }
+        invoices.forEach(inv => {
+            const total = parseFloat(inv.total) || 0;
+            const outstanding = total - (parseFloat(inv.paidAmount || 0) + parseFloat(inv.setoffAmount || 0));
+            const creditPeriod = inv.Customer?.creditPeriod || 0;
+            const dueDate = new Date(inv.invoiceDate);
+            dueDate.setDate(dueDate.getDate() + creditPeriod);
+            const isOverDue = new Date() > dueDate && outstanding > 0;
+
+            totalSalesValue += total;
+            totalOutstandingValue += outstanding;
+            totalOverdueValue += isOverDue ? outstanding : 0;
+        });
+
+        // ------------------------------------------------------------------
+        // 4. Approved invoices — collection (paid) & outstanding (unpaid)
+        // ------------------------------------------------------------------
+        const approvedInvoiceWhere = { status: 'Approved' };
+        if (startDate && endDate) approvedInvoiceWhere.invoiceDate = dateFilter;
 
         const approvedInvoices = await Invoice.findAll({
             where: approvedInvoiceWhere,
             include: [{
                 model: Customer,
-                where: routeCustomerIds !== null ? { id: { [Op.in]: routeCustomerIds } } : {},
-                required: routeCustomerIds !== null
+                where: { routeId: routeId },
+                required: true
             }]
         });
 
-        let collectionTotal = 0;   // sum of paidAmount on Approved invoices
-        let outstandingTotal = 0;  // sum of (total - paidAmount - setoffAmount) on Approved invoices
-
+        let collectionTotal = 0;
+        let outstandingTotal = 0;
         approvedInvoices.forEach(inv => {
             const total = parseFloat(inv.total) || 0;
             const paid = parseFloat(inv.paidAmount || 0);
             const setoff = parseFloat(inv.setoffAmount || 0);
-            const unpaid = Math.max(0, total - paid - setoff);
-
             collectionTotal += paid;
-            outstandingTotal += unpaid;
+            outstandingTotal += Math.max(0, total - paid - setoff);
         });
 
-        invoices.forEach(inv => {
-            const total = parseFloat(inv.total) || 0;
-            const outstanding = total - (parseFloat(inv.paidAmount || 0) + parseFloat(inv.setoffAmount || 0));
-
-            // Calculate Due Date & Overdue
-            const creditPeriod = inv.Customer?.creditPeriod || 0;
-            const dueDate = new Date(inv.invoiceDate);
-            dueDate.setDate(dueDate.getDate() + creditPeriod);
-
-            const isOverDue = new Date() > dueDate && outstanding > 0;
-            const overDueValue = isOverDue ? outstanding : 0;
-
-            totalSalesValue += total;
-            totalOutstandingValue += outstanding;
-            totalOverdueValue += overDueValue;
-        });
-
-        // 5. Get Customer Returns count for customers assigned to this salesperson
+        // ------------------------------------------------------------------
+        // 5. Customer returns count — scoped to route customers
+        // ------------------------------------------------------------------
         const returnWhere = {};
-        if (startDate && endDate) {
-            returnWhere.returnDate = dateFilter;
-        }
+        if (startDate && endDate) returnWhere.returnDate = dateFilter;
 
         const returnCount = await CustomerReturn.count({
             where: returnWhere,
             include: [{
                 model: Customer,
                 as: 'Customer',
-                where: routeCustomerIds !== null ? { id: { [Op.in]: routeCustomerIds } } : {},
-                required: true,
-                include: [{
-                    model: SalesPersonCustomer,
-                    as: 'SalesPeople',
-                    where: { userId: salespersonId },
-                    required: true
-                }]
+                where: { routeId: routeId },
+                required: true
             }]
         });
 
         res.json({
             success: true,
             data: {
+                routeId: routeId,
+                routeName: 'Route ' + routeId,
                 customerCount,
-                // Sales Orders split
-                salesOrderCount: salesOrderApprovedCount,         // kept for backward compat
+                salesOrderCount: salesOrderApprovedCount,      // backward compat
                 salesOrderApprovedCount,
                 salesOrderPendingCount,
-                // Invoice financials
                 salesOrderTotal: totalSalesValue.toFixed(2),
                 outstandingAmount: totalOutstandingValue.toFixed(2),
                 overdueAmount: totalOverdueValue.toFixed(2),
-                // Collection & Outstanding from Approved invoices
                 collectionTotal: collectionTotal.toFixed(2),
                 outstandingTotal: outstandingTotal.toFixed(2),
                 returnCount
@@ -252,6 +217,85 @@ exports.getSalesOrdersBySalespersonId = async (req, res) => {
     }
 };
 
+/**
+ * Get Customers by RouteId for Mobile (Sales App)
+ * Returns all customers whose routeId FK matches the given routeId,
+ * merged with any customers in the route's customerIds JSON array.
+ * GET /api/mobile/route-customers/:routeId
+ */
+exports.getCustomersByRouteId = async (req, res) => {
+    try {
+        const { routeId } = req.params;
+
+        if (!routeId || routeId === 'undefined' || routeId === 'null') {
+            return res.status(400).json({ success: false, error: 'routeId is required' });
+        }
+
+        const route = await Route.findByPk(routeId, {
+            attributes: ['id', 'routeName', 'city', 'description', 'days', 'status', 'customerIds', 'salesPersonId']
+        });
+
+        if (!route) {
+            return res.status(404).json({ success: false, error: 'Route not found' });
+        }
+
+        // 1. Customers assigned via FK routeId column
+        const customersByFK = await Customer.findAll({
+            where: { routeId, status: { [Op.ne]: 'Inactive' } },
+            attributes: ['id', 'name', 'type', 'address', 'contactPerson', 'contactNumber', 'contactNumber2', 'email', 'routeId', 'parentId', 'latitude', 'longitude', 'status', 'creditLimit', 'creditPeriod', 'discountRate', 'paymentMethod'],
+            include: [
+                { model: Route, as: 'route', attributes: ['id', 'routeName', 'city', 'description'] },
+                { model: Customer, as: 'Parent', attributes: ['id', 'name'] }
+            ],
+            order: [['name', 'ASC']]
+        });
+
+        // 2. Customers in the JSON customerIds array (legacy)
+        let customersByJSON = [];
+        if (Array.isArray(route.customerIds) && route.customerIds.length > 0) {
+            const validIds = route.customerIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+            if (validIds.length > 0) {
+                customersByJSON = await Customer.findAll({
+                    where: { id: { [Op.in]: validIds }, status: { [Op.ne]: 'Inactive' } },
+                    attributes: ['id', 'name', 'type', 'address', 'contactPerson', 'contactNumber', 'contactNumber2', 'email', 'routeId', 'parentId', 'latitude', 'longitude', 'status', 'creditLimit', 'creditPeriod', 'discountRate', 'paymentMethod'],
+                    include: [
+                        { model: Route, as: 'route', attributes: ['id', 'routeName', 'city', 'description'] },
+                        { model: Customer, as: 'Parent', attributes: ['id', 'name'] }
+                    ],
+                    order: [['name', 'ASC']]
+                });
+            }
+        }
+
+        // 3. Merge & deduplicate
+        const merged = {};
+        [...customersByFK, ...customersByJSON].forEach(c => {
+            if (!merged[c.id]) merged[c.id] = c.toJSON();
+        });
+        const customers = Object.values(merged).sort((a, b) => a.name.localeCompare(b.name));
+
+        // Attach route info to each customer
+        const routeInfo = { id: route.id, routeName: route.routeName, city: route.city, description: route.description };
+        const result = customers.map(c => ({
+            ...c,
+            route: c.route || routeInfo,
+            routes: [routeInfo]
+        }));
+
+        res.json({
+            success: true,
+            routeId: parseInt(routeId),
+            routeName: route.routeName,
+            city: route.city,
+            total: result.length,
+            data: result
+        });
+    } catch (error) {
+        console.error('Error fetching customers by routeId:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
 exports.getCustomersBySalespersonId = async (req, res) => {
     try {
         const { salespersonId } = req.params;
@@ -268,6 +312,11 @@ exports.getCustomersBySalespersonId = async (req, res) => {
                     model: Customer,
                     as: 'Parent',
                     attributes: ['id', 'name']
+                },
+                {
+                    model: Route,
+                    as: 'route',
+                    attributes: ['id', 'routeName', 'description', 'city', 'days', 'status']
                 }
             ],
             order: [['name', 'ASC']]
@@ -283,13 +332,17 @@ exports.getCustomersBySalespersonId = async (req, res) => {
 
         const customersWithRoutes = customers.map(customer => {
             const customerObj = customer.toJSON();
-            // Find routes that include this customer
-            const customerRoutes = routes.filter(route =>
-                route.customerIds &&
-                Array.isArray(route.customerIds) &&
-                route.customerIds.includes(customer.id)
+            // Find routes that include this customer (via customerIds JSON or routeId)
+            const matchedRoutes = routes.filter(route =>
+                (route.id === customer.routeId) ||
+                (route.customerIds && Array.isArray(route.customerIds) && route.customerIds.includes(customer.id))
             );
-            customerObj.routes = customerRoutes.map(route => ({
+
+            if (customer.route && !matchedRoutes.some(r => r.id === customer.route.id)) {
+                matchedRoutes.push(customer.route);
+            }
+
+            customerObj.routes = matchedRoutes.map(route => ({
                 id: route.id,
                 routeName: route.routeName,
                 description: route.description,
@@ -518,6 +571,76 @@ exports.getInvoicesBySalespersonId = async (req, res) => {
         });
     } catch (error) {
         console.error('Error fetching salesperson invoices:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+/**
+ * Get Delivery Orders by RouteId for Mobile (Sales App)
+ * GET /api/mobile/delivery-orders/:routeId?status=Dispatched&search=
+ */
+exports.getDeliveryOrdersByRouteId = async (req, res) => {
+    try {
+        const { routeId } = req.params;
+        const { status = 'Dispatched', search, limit = 100, page = 1 } = req.query;
+
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+
+        const where = {};
+        if (routeId && routeId !== 'all' && routeId !== '0' && routeId !== 'undefined' && routeId !== 'null') {
+            where.routeId = routeId;
+        }
+
+        // Filter by status (allow 'All' to skip)
+        if (status && status !== 'All') {
+            where.status = status;
+        }
+
+        // Search by doNumber or customer name
+        if (search && search.trim()) {
+            const matchingCustomers = await Customer.findAll({
+                where: { name: { [Op.like]: `%${search.trim()}%` } },
+                attributes: ['id'],
+                raw: true
+            });
+            const customerIds = matchingCustomers.map(c => c.id);
+
+            where[Op.or] = [
+                { doNumber: { [Op.like]: `%${search.trim()}%` } },
+                { customerId: { [Op.in]: customerIds.length ? customerIds : [-1] } }
+            ];
+        }
+
+        const { count, rows } = await DeliveryOrder.findAndCountAll({
+            where,
+            include: [
+                {
+                    model: SalesOrder,
+                    include: [
+                        { model: Customer, attributes: ['id', 'name', 'address', 'contactNumber', 'type'] }
+                    ]
+                },
+                { model: Driver, attributes: ['id', 'name', 'mobile'] },
+                { model: Route, attributes: ['id', 'routeName', 'city', 'startPoint', 'endPoint'] },
+                { model: Vehicle, attributes: ['id', 'vehicleNumber', 'vehicleType'] },
+                {
+                    model: DeliveryOrderItem,
+                    include: [{ model: Item, attributes: ['id', 'name', 'sku', 'unit'] }]
+                }
+            ],
+            order: [['createdAt', 'DESC']],
+            limit: parseInt(limit),
+            offset,
+            distinct: true
+        });
+
+        res.json({
+            success: true,
+            data: rows,
+            total: count
+        });
+    } catch (error) {
+        console.error('Error fetching delivery orders by routeId:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };

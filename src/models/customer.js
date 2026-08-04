@@ -23,6 +23,14 @@ const Customer = sequelize.define('Customer', {
             key: 'id',
         },
     },
+    routeId: {
+        type: DataTypes.INTEGER,
+        allowNull: true,
+        references: {
+            model: 'routes',
+            key: 'id',
+        },
+    },
     address: {
         type: DataTypes.STRING,
         allowNull: true,

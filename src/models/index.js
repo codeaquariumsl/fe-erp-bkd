@@ -144,6 +144,8 @@ Item.belongsTo(Category, { foreignKey: 'categoryId' });
 
 Customer.hasMany(Customer, { as: 'Branches', foreignKey: 'parentId' });
 Customer.belongsTo(Customer, { as: 'Parent', foreignKey: 'parentId' });
+Customer.belongsTo(Route, { foreignKey: 'routeId', as: 'route' });
+Route.hasMany(Customer, { foreignKey: 'routeId', as: 'customers' });
 Customer.hasMany(SalesOrder, { foreignKey: 'customerId' });
 Customer.hasMany(DeliveryOrder, { foreignKey: 'customerId' });
 

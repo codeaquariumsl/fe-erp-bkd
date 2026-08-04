@@ -1,10 +1,12 @@
 const Route = require('../models/route');
 const Vehicle = require('../models/vehicle');
+const Customer = require('../models/customer');
+const { Op } = require('sequelize');
 
 // Create a new route
 exports.createRoute = async (req, res) => {
     try {
-        const { routeName, description, city, startPoint, endPoint, distanceKm, estimateTime, status, vehicleId, driverId, customerIds, days, locationId } = req.body;
+        const { routeName, description, city, startPoint, endPoint, distanceKm, estimateTime, status, vehicleId, driverId, salesPersonId, customerIds, days, locationId } = req.body;
         const currentUserId = (req.user && req.user.id) || (req.body.user && req.body.user.id) || null;
         if (!currentUserId) {
             return res.status(401).json({ error: 'Unauthorized: missing user context' });
@@ -38,11 +40,22 @@ exports.createRoute = async (req, res) => {
         
         const route = await Route.create({
             routeName, description, city, startPoint, endPoint, distanceKm, estimateTime, status,
-            vehicleId, driverId, customerIds: validatedCustomerIds, days: validatedDays,
+            vehicleId, driverId, salesPersonId: salesPersonId || null, customerIds: validatedCustomerIds, days: validatedDays,
             locationId: locationId,
             createdBy: currentUserId,
             updatedBy: currentUserId
         });
+
+        // Sync Customer.routeId for assigned customers
+        if (Array.isArray(validatedCustomerIds) && validatedCustomerIds.length > 0) {
+            const validIds = validatedCustomerIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+            if (validIds.length > 0) {
+                await Customer.update(
+                    { routeId: route.id },
+                    { where: { id: { [Op.in]: validIds } } }
+                );
+            }
+        }
         
         const result = await Route.findByPk(route.id, { include: Vehicle });
         res.status(201).json(result);
@@ -138,20 +151,44 @@ exports.getRoutes = async (req, res) => {
                 const driver = await Driver.findByPk(routeObj.driverId);
                 routeObj.driver = driver ? driver.toJSON() : null;
             }
+
+            // Add sales person details if salesPersonId exists
+            if (routeObj.salesPersonId) {
+                const salesPerson = await User.findByPk(routeObj.salesPersonId, { attributes: ['id', 'username', 'fullName', 'mobile', 'email'] });
+                routeObj.salesPerson = salesPerson ? salesPerson.toJSON() : null;
+            }
             
-            // Add customer details if customerIds exist
-            if (routeObj.customerIds && Array.isArray(routeObj.customerIds) && routeObj.customerIds.length > 0) {
-                try {
-                    const customers = await Customer.findAll({
+            // Merge customers from both customerIds JSON array and routeId FK column
+            try {
+                // Customers assigned via routeId FK (new approach)
+                const customersByRouteId = await Customer.findAll({
+                    where: { routeId: route.id },
+                    attributes: ['id', 'name', 'type', 'email', 'contactNumber', 'address', 'routeId']
+                });
+
+                // Customers assigned via customerIds JSON (legacy approach)
+                let customersByIds = [];
+                if (routeObj.customerIds && Array.isArray(routeObj.customerIds) && routeObj.customerIds.length > 0) {
+                    customersByIds = await Customer.findAll({
                         where: { id: routeObj.customerIds },
-                        attributes: ['id', 'name', 'email', 'contactNumber', 'address']
+                        attributes: ['id', 'name', 'type', 'email', 'contactNumber', 'address', 'routeId']
                     });
-                    routeObj.customers = customers.map(customer => customer.toJSON());
-                } catch (customerError) {
-                    console.warn('Error fetching customers for route:', routeObj.id, customerError.message);
-                    routeObj.customers = [];
                 }
-            } else {
+
+                // Merge and deduplicate by id
+                const allCustomerMap = {};
+                [...customersByRouteId, ...customersByIds].forEach(c => {
+                    allCustomerMap[c.id] = c.toJSON();
+                });
+                routeObj.customers = Object.values(allCustomerMap);
+
+                // Sync customerIds JSON to match the merged set
+                const mergedIds = routeObj.customers.map(c => c.id);
+                if (JSON.stringify((routeObj.customerIds || []).sort()) !== JSON.stringify(mergedIds.sort())) {
+                    routeObj.customerIds = mergedIds;
+                }
+            } catch (customerError) {
+                console.warn('Error fetching customers for route:', routeObj.id, customerError.message);
                 routeObj.customers = [];
             }
             
@@ -190,6 +227,12 @@ exports.getRouteById = async (req, res) => {
             const driver = await Driver.findByPk(routeObj.driverId);
             routeObj.driver = driver ? driver.toJSON() : null;
         }
+
+        // Add sales person details if salesPersonId exists
+        if (routeObj.salesPersonId) {
+            const salesPerson = await User.findByPk(routeObj.salesPersonId, { attributes: ['id', 'username', 'fullName', 'mobile', 'email'] });
+            routeObj.salesPerson = salesPerson ? salesPerson.toJSON() : null;
+        }
         
         // Add customer details if customerIds exist
         if (routeObj.customerIds && Array.isArray(routeObj.customerIds) && routeObj.customerIds.length > 0) {
@@ -216,7 +259,7 @@ exports.getRouteById = async (req, res) => {
 // Update a route
 exports.updateRoute = async (req, res) => {
     try {
-        const { routeName, description, city, startPoint, endPoint, distanceKm, estimateTime, vehicleId, driverId, status, vehicleIds, customerIds, days } = req.body;
+        const { routeName, description, city, startPoint, endPoint, distanceKm, estimateTime, vehicleId, driverId, salesPersonId, status, vehicleIds, customerIds, days } = req.body;
         const route = await Route.findByPk(req.params.id);
         if (!route) return res.status(404).json({ error: 'Route not found' });
         const currentUserId = (req.user && req.user.id) || (req.body.user && req.body.user.id) || null;
@@ -256,6 +299,7 @@ exports.updateRoute = async (req, res) => {
         
         const updateData = { 
             routeName, description, city, startPoint, endPoint, distanceKm, estimateTime, vehicleId, driverId, status,
+            salesPersonId: salesPersonId !== undefined ? (salesPersonId || null) : route.salesPersonId,
             updatedBy: currentUserId 
         };
         
@@ -268,6 +312,32 @@ exports.updateRoute = async (req, res) => {
         }
         
         await route.update(updateData);
+
+        // Sync Customer.routeId for added/removed customers
+        if (validatedCustomerIds !== undefined) {
+            const newCustomerIds = Array.isArray(validatedCustomerIds)
+                ? validatedCustomerIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id))
+                : [];
+
+            // Assign new routeId to currently selected customers
+            if (newCustomerIds.length > 0) {
+                await Customer.update(
+                    { routeId: route.id },
+                    { where: { id: { [Op.in]: newCustomerIds } } }
+                );
+            }
+
+            // Unassign customers that were previously on this route but are no longer in newCustomerIds
+            await Customer.update(
+                { routeId: null },
+                {
+                    where: {
+                        routeId: route.id,
+                        ...(newCustomerIds.length > 0 ? { id: { [Op.notIn]: newCustomerIds } } : {})
+                    }
+                }
+            );
+        }
         
         if (vehicleIds && Array.isArray(vehicleIds)) {
             await route.setVehicles(vehicleIds);
@@ -344,6 +414,13 @@ exports.deleteRoute = async (req, res) => {
     try {
         const route = await Route.findByPk(req.params.id);
         if (!route) return res.status(404).json({ error: 'Route not found' });
+        
+        // Unassign all customers from this route
+        await Customer.update(
+            { routeId: null },
+            { where: { routeId: route.id } }
+        );
+
         await route.destroy();
         res.json({ message: 'Route deleted' });
     } catch (error) {

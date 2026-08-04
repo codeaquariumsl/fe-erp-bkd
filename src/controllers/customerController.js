@@ -245,6 +245,11 @@ exports.getCustomers = async (req, res) => {
                     attributes: ['id', 'username']
                 },
                 {
+                    model: Route,
+                    as: 'route',
+                    attributes: ['id', 'routeName', 'city', 'description']
+                },
+                {
                     model: LedgerAccount,
                     as: 'LedgerAccount',
                     attributes: ['id', 'ledgerCode', 'name']
@@ -306,6 +311,7 @@ exports.getCustomerById = async (req, res) => {
             include: [
                 { model: User, as: 'createdByUser', attributes: ['id', 'username'] },
                 { model: User, as: 'updatedByUser', attributes: ['id', 'username'] },
+                { model: Route, as: 'route', attributes: ['id', 'routeName', 'city', 'description'] },
                 { model: LedgerAccount, as: 'LedgerAccount', attributes: ['id', 'ledgerCode', 'name'] },
                 {
                     model: CustomerCategoryDiscount,

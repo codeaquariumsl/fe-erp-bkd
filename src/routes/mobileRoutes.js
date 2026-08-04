@@ -30,6 +30,12 @@ router.get('/invoices/:salespersonId', mobileController.getInvoicesBySalesperson
 router.get('/customers/:salespersonId', mobileController.getCustomersBySalespersonId);
 
 /**
+ * @route   GET /api/mobile/route-customers/:routeId
+ * @desc    Get all customers assigned to a specific route (used on login)
+ */
+router.get('/route-customers/:routeId', mobileController.getCustomersByRouteId);
+
+/**
  * @route   GET /api/mobile/returns/:salespersonId
  * @desc    Get customer returns for a salesperson's customers
  */
@@ -40,5 +46,12 @@ router.get('/returns/:salespersonId', mobileController.getCustomerReturnsBySales
  * @desc    Get outstanding invoices for a salesperson
  */
 router.get('/outstandings/:salespersonId', mobileController.getCustomerOutstandingsBySalespersonId);
+
+/**
+ * @route   GET /api/mobile/delivery-orders/:routeId
+ * @desc    Get delivery orders for a route (mobile sales app)
+ * @query   status (default: Dispatched), search, limit, page
+ */
+router.get('/delivery-orders/:routeId', mobileController.getDeliveryOrdersByRouteId);
 
 module.exports = router;
