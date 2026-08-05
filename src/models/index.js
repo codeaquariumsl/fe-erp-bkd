@@ -167,6 +167,8 @@ Stock.belongsTo(Store, { foreignKey: 'storeId' });
 Store.hasMany(Stock, { foreignKey: 'storeId' });
 StockDetail.belongsTo(Stock, { foreignKey: 'stockId' });
 SalesOrder.belongsTo(Customer, { foreignKey: 'customerId' });
+SalesOrder.belongsTo(Route, { foreignKey: 'routeId', as: 'Route' });
+Route.hasMany(SalesOrder, { foreignKey: 'routeId' });
 SalesOrder.belongsTo(User, { foreignKey: 'idSalesPerson', as: 'SalesPerson' });
 SalesOrder.hasMany(SalesOrderItem, { foreignKey: 'salesOrderId' });
 SalesOrderItem.belongsTo(SalesOrder, { foreignKey: 'salesOrderId' });

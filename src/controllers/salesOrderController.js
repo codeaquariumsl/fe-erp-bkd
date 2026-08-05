@@ -163,6 +163,7 @@ exports.getAllSalesOrders = async (req, res) => {
             search,
             customerId,
             salesPersonId,
+            routeId,
             isTaxInvoice,
             createdBy,
             status,
@@ -194,6 +195,30 @@ exports.getAllSalesOrders = async (req, res) => {
             whereClause.customerId = customerId;
         }
 
+        // Route filter (checks SalesOrder.routeId or Customer.routeId)
+        const andConditions = [];
+
+        if (routeId && routeId !== 'ALL') {
+            const routeObj = await Route.findByPk(routeId);
+            const customerIdsFromRouteJson = Array.isArray(routeObj?.customerIds) ? routeObj.customerIds : [];
+
+            const matchingCustomersByRoute = await Customer.findAll({
+                where: { routeId: routeId },
+                attributes: ['id'],
+                raw: true
+            });
+            const customerIdsByRouteField = matchingCustomersByRoute.map(c => c.id);
+
+            const allCustomerIdsForRoute = [...new Set([...customerIdsFromRouteJson, ...customerIdsByRouteField])].map(id => Number(id));
+
+            andConditions.push({
+                [Op.or]: [
+                    { routeId: routeId },
+                    ...(allCustomerIdsForRoute.length > 0 ? [{ customerId: { [Op.in]: allCustomerIdsForRoute } }] : [])
+                ]
+            });
+        }
+
         // SalesPerson filter
         const salesPersonInclude = {
             model: User,
@@ -222,10 +247,16 @@ exports.getAllSalesOrders = async (req, res) => {
             });
             const customerIdsByName = matchingCustomers.map(c => c.id);
 
-            whereClause[Op.or] = [
-                { orderNumber: { [Op.like]: `%${search}%` } },
-                { customerId: { [Op.in]: customerIdsByName } }
-            ];
+            andConditions.push({
+                [Op.or]: [
+                    { orderNumber: { [Op.like]: `%${search}%` } },
+                    { customerId: { [Op.in]: customerIdsByName } }
+                ]
+            });
+        }
+
+        if (andConditions.length > 0) {
+            whereClause[Op.and] = andConditions;
         }
 
         // ── Query ─────────────────────────────────────────────────────────────
@@ -249,6 +280,7 @@ exports.getAllSalesOrders = async (req, res) => {
             where: whereClause,
             include: [
                 { model: Customer },
+                { model: Route, as: 'Route', attributes: ['id', 'routeName'], required: false },
                 salesPersonInclude,
                 { model: SalesOrderItem, include: [Item] },
                 deliveryOrderInclude,
