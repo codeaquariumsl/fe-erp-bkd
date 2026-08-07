@@ -320,6 +320,12 @@ exports.createDeliveryOrderSummary = async (req, res) => {
             });
         }
 
+        // Destroy any existing summary items for these delivery orders to prevent duplicate entries
+        await DeliveryOrderSummaryItem.destroy({
+            where: { deliveryOrderId: { [Op.in]: orderIds } },
+            transaction: t
+        });
+
         // Create delivery order summary items with Batch assignment
         const summaryItemsToCreate = [];
         const batchReservationResults = [];

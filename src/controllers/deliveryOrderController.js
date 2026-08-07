@@ -396,6 +396,12 @@ exports.updateDeliveryOrder = async (req, res) => {
                             damagedQty: item.damagedQty !== undefined ? item.damagedQty : existingItem.damagedQty,
                             weightDiffQty: item.weightDiffQty !== undefined ? item.weightDiffQty : existingItem.weightDiffQty
                         }, { transaction: t });
+                        if (item.qty !== undefined) {
+                            await DeliveryOrderSummaryItem.update(
+                                { qty: item.qty },
+                                { where: { deliveryOrderItemId: existingItem.id }, transaction: t }
+                            );
+                        }
                         updatedItemIds.push(item.id);
                     }
                 } else {
@@ -418,6 +424,10 @@ exports.updateDeliveryOrder = async (req, res) => {
             // Delete items that are no longer in the request
             const itemsToDelete = existingItemIds.filter(id => !updatedItemIds.includes(id));
             if (itemsToDelete.length > 0) {
+                await DeliveryOrderSummaryItem.destroy({
+                    where: { deliveryOrderItemId: { [Op.in]: itemsToDelete } },
+                    transaction: t
+                });
                 await DeliveryOrderItem.destroy({
                     where: { id: itemsToDelete },
                     transaction: t
