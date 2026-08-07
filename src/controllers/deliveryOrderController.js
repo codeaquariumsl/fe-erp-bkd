@@ -486,7 +486,33 @@ exports.assignDriverRouteVehicle = async (req, res) => {
         const order = await DeliveryOrder.findByPk(req.params.id);
         if (!order) return res.status(404).json({ error: 'Delivery Order not found' });
         if (order.status !== 'Pending') return res.status(400).json({ error: 'Only Pending Delivery Order can be assigned' });
-        await order.update({ driverId, routeId, vehicleId, storeId });
+
+        let validVehicleId = null;
+        if (vehicleId && vehicleId !== 0 && vehicleId !== '0') {
+            const vehicleExists = await Vehicle.findByPk(vehicleId);
+            if (vehicleExists) validVehicleId = vehicleId;
+        }
+
+        let validDriverId = null;
+        if (driverId && driverId !== 0 && driverId !== '0') {
+            const driverExists = await Driver.findByPk(driverId);
+            if (driverExists) validDriverId = driverId;
+        }
+
+        let validRouteId = null;
+        if (routeId && routeId !== 0 && routeId !== '0') {
+            const routeExists = await Route.findByPk(routeId);
+            if (routeExists) validRouteId = routeId;
+        }
+
+        const Store = require('../models/store');
+        let validStoreId = null;
+        if (storeId && storeId !== 0 && storeId !== '0') {
+            const storeExists = await Store.findByPk(storeId);
+            if (storeExists) validStoreId = storeId;
+        }
+
+        await order.update({ driverId: validDriverId, routeId: validRouteId, vehicleId: validVehicleId, storeId: validStoreId });
         res.json(order);
     } catch (error) {
         res.status(400).json({ error: error.message });

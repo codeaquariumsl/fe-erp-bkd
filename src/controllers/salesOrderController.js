@@ -5,7 +5,7 @@ const Item = require('../models/item');
 const ItemPrice = require('../models/itemPrice');
 const Stock = require('../models/stock');
 const StockDetail = require('../models/stockDetail');
-const { sequelize, Route, DeliveryOrder, User, CustomerItemCode, Category, Location, Batch, BatchItem, CustomerCategoryDiscount } = require('../models');
+const { sequelize, Route, DeliveryOrder, User, CustomerItemCode, Category, Location, Batch, BatchItem, CustomerCategoryDiscount, Vehicle, Driver } = require('../models');
 const { generateDocumentNumber } = require('./documentControllerClient');
 const { sendSalesOrderApprovedNotification } = require('../utils/smsService');
 const { Op } = require('sequelize');
@@ -745,7 +745,24 @@ exports.approveOrRejectSalesOrder = async (req, res) => {
             const DeliveryOrder = require('../models/deliveryOrder');
             const DeliveryOrderItem = require('../models/deliveryOrderItem');
 
-            const route = await Route.findByPk(order.routeId, { attributes: ['id', 'driverId', 'vehicleId'] });
+            const route = order.routeId ? await Route.findByPk(order.routeId, { attributes: ['id', 'driverId', 'vehicleId'], transaction: t }) : null;
+            
+            let validVehicleId = null;
+            if (route?.vehicleId && route.vehicleId !== 0) {
+                const vehicleExists = await Vehicle.findByPk(route.vehicleId, { transaction: t });
+                if (vehicleExists) {
+                    validVehicleId = route.vehicleId;
+                }
+            }
+
+            let validDriverId = null;
+            if (route?.driverId && route.driverId !== 0) {
+                const driverExists = await Driver.findByPk(route.driverId, { transaction: t });
+                if (driverExists) {
+                    validDriverId = route.driverId;
+                }
+            }
+
             const deliveryOrder = await DeliveryOrder.create({
                 doNumber,
                 salesOrderId: order.id,
@@ -753,8 +770,8 @@ exports.approveOrRejectSalesOrder = async (req, res) => {
                 isDelivery: order.isDelivery,
                 orderDate: new Date(), // order.orderDate,
                 routeId: route?.id || null,
-                driverId: route?.driverId || null,
-                vehicleId: route?.vehicleId || null,
+                driverId: validDriverId,
+                vehicleId: validVehicleId,
                 dispatchDate: order.deliveryDate,
                 deliveryAddress: order.deliveryAddress,
                 totalWeight: order.totalWeight,
