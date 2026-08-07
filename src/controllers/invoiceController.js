@@ -190,6 +190,7 @@ exports.createInvoice = async (req, res) => {
                 invoiceId: invoice.id,
                 itemId: item.itemId,
                 qty: item.qty,
+                freeQty: item.freeQty !== undefined ? item.freeQty : (item.freeIssueQty || 0),
                 price: item.price,
                 isTaxItem: item.isTaxItem || false,
                 taxAmount: item.taxAmount || 0.0,
@@ -553,6 +554,7 @@ exports.updateInvoice = async (req, res) => {
                 invoiceId: invoice.id,
                 itemId: item.itemId,
                 qty: item.qty,
+                freeQty: item.freeQty !== undefined ? item.freeQty : (item.freeIssueQty || 0),
                 price: item.price,
                 total: item.qty * item.price
             }, { transaction: t });

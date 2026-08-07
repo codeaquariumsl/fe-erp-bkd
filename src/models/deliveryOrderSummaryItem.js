@@ -13,6 +13,7 @@ const DeliveryOrderSummaryItem = sequelize.define('DeliveryOrderSummaryItem', {
     batchItemId: { type: DataTypes.INTEGER, allowNull: true },
     releaseStoreId: { type: DataTypes.INTEGER, allowNull: true },
     qty: { type: DataTypes.INTEGER, allowNull: false },
+    freeQty: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     isReady: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     isReleased: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
     isActive: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },

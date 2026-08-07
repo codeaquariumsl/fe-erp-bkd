@@ -10,6 +10,7 @@ const InvoiceItem = sequelize.define('InvoiceItem', {
         comment: 'Customer specific code for the item'
     },
     qty: { type: DataTypes.INTEGER, allowNull: false },
+    freeQty: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     discount: {
         type: DataTypes.FLOAT,
         allowNull: false,

@@ -523,6 +523,7 @@ exports.createDeliveryOrderSummary = async (req, res) => {
                 batchId: selectedBatchId,
                 releaseStoreId: releaseStoreId,  // Now using storeId from batch
                 qty: doItem.qty,
+                freeQty: doItem.freeQty || 0,
                 isReady: false,
                 isReleased: false,
                 isActive: true,

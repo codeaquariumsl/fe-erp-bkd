@@ -42,7 +42,8 @@ exports.createDeliveryOrder = async (req, res) => {
                 await DeliveryOrderItem.create({
                     deliveryOrderId: deliveryOrder.id,
                     itemId: item.itemId,
-                    qty: item.qty
+                    qty: item.qty,
+                    freeQty: item.freeQty !== undefined ? item.freeQty : (item.freeIssueQty || 0)
                 }, { transaction: t });
             }
         }
@@ -410,6 +411,7 @@ exports.updateDeliveryOrder = async (req, res) => {
                         deliveryOrderId: deliveryOrder.id,
                         itemId: item.itemId,
                         qty: item.qty,
+                        freeQty: item.freeQty !== undefined ? item.freeQty : (item.freeIssueQty || 0),
                         batchId: item.batchId || null,
                         storeId: item.storeId || null,
                         acceptedQty: item.acceptedQty || 0,
@@ -654,11 +656,13 @@ exports.approveOrRejectDeliveryOrder = async (req, res) => {
                 // Calculate total (quantity * excluding tax amount)
                 const itemTotal = item.qty * excludingTaxAmount;
 
+                const freeQty = item.freeQty !== undefined ? item.freeQty : (soItem ? (soItem.freeIssueQty || 0) : 0);
                 await InvoiceItem.create({
                     invoiceId: invoice.id,
                     itemId: item.itemId,
                     code: soItem ? soItem.code : null,
                     qty: item.qty,
+                    freeQty: freeQty,
                     price: price,
                     discount: discountPercentage,
                     isTaxItem: isTaxItem,

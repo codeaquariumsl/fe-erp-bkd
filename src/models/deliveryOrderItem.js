@@ -6,6 +6,7 @@ const DeliveryOrderItem = sequelize.define('DeliveryOrderItem', {
     deliveryOrderId: { type: DataTypes.INTEGER, allowNull: false },
     itemId: { type: DataTypes.INTEGER, allowNull: false },
     qty: { type: DataTypes.INTEGER, allowNull: false },
+    freeQty: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
     batchId: { type: DataTypes.INTEGER, allowNull: true },
     storeId: {
         type: DataTypes.INTEGER,

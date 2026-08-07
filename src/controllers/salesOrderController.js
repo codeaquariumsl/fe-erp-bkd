@@ -121,7 +121,7 @@ exports.createSalesOrder = async (req, res) => {
                     price: item.price,
                     discount: discount,
                     isTaxItem: item.isTaxItem || false,
-                    freeIssueQty: item.freeIssueQty || 0,
+                    freeIssueQty: item.freeIssueQty !== undefined ? item.freeIssueQty : (item.freeQty || 0),
                     discountedAmount: item.discountedAmount,
                     excludingTaxAmount: item.excludingTaxAmount,
                     total: item.total,
@@ -746,7 +746,7 @@ exports.approveOrRejectSalesOrder = async (req, res) => {
             const DeliveryOrderItem = require('../models/deliveryOrderItem');
 
             const route = order.routeId ? await Route.findByPk(order.routeId, { attributes: ['id', 'driverId', 'vehicleId'], transaction: t }) : null;
-            
+
             let validVehicleId = null;
             if (route?.vehicleId && route.vehicleId !== 0) {
                 const vehicleExists = await Vehicle.findByPk(route.vehicleId, { transaction: t });
@@ -785,7 +785,8 @@ exports.approveOrRejectSalesOrder = async (req, res) => {
                 await DeliveryOrderItem.create({
                     deliveryOrderId: deliveryOrder.id,
                     itemId: soItem.itemId,
-                    qty: soItem.qty
+                    qty: soItem.qty,
+                    freeQty: soItem.freeIssueQty || 0
                 }, { transaction: t });
             }
 
@@ -1193,7 +1194,7 @@ exports.getSalesItemsByCustomerMobile = async (req, res) => {
                     attributes: ['id', 'name']
                 }
             ],
-            attributes: ['id', 'name', 'unit', 'sellingPrice']
+            attributes: ['id', 'name', 'unit', 'sellingPrice', 'isFreeIssue', 'freeIssuePerCount', 'freeIssueCount']
         });
 
         const itemsWithStock = [];
@@ -1221,7 +1222,10 @@ exports.getSalesItemsByCustomerMobile = async (req, res) => {
                 categoryName: item.Category ? item.Category.name : null,
                 unit: item.unit,
                 sellingPrice: item.sellingPrice,
-                availableQty: totalAvailableQty
+                availableQty: totalAvailableQty,
+                isFreeIssue: item.isFreeIssue,
+                freeIssuePerCount: item.freeIssuePerCount,
+                freeIssueCount: item.freeIssueCount
             });
         }
 
