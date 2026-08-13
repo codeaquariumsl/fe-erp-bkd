@@ -221,6 +221,7 @@ exports.getAllInvoices = async (req, res) => {
             limit,
             search,
             status,
+            paymentStatus,
             customerId,
             salesPersonId,
             dateFrom,
@@ -256,6 +257,31 @@ exports.getAllInvoices = async (req, res) => {
             }
         }
 
+        // Payment status filter
+        if (paymentStatus && paymentStatus !== 'all') {
+            if (paymentStatus === 'paid') {
+                whereClause[Op.and] = [
+                    ...(whereClause[Op.and] || []),
+                    sequelize.where(sequelize.literal('(CAST(Invoice.paidAmount AS DECIMAL(10,2)) + CAST(Invoice.setoffAmount AS DECIMAL(10,2)))'), '>=', sequelize.col('Invoice.total')),
+                    { total: { [Op.gt]: 0 } },
+                    { status: { [Op.ne]: 'Cancelled' } }
+                ];
+            } else if (paymentStatus === 'partially_paid') {
+                whereClause[Op.and] = [
+                    ...(whereClause[Op.and] || []),
+                    sequelize.where(sequelize.literal('(CAST(Invoice.paidAmount AS DECIMAL(10,2)) + CAST(Invoice.setoffAmount AS DECIMAL(10,2)))'), '>', 0),
+                    sequelize.where(sequelize.literal('(CAST(Invoice.paidAmount AS DECIMAL(10,2)) + CAST(Invoice.setoffAmount AS DECIMAL(10,2)))'), '<', sequelize.col('Invoice.total')),
+                    { status: { [Op.ne]: 'Cancelled' } }
+                ];
+            } else if (paymentStatus === 'unpaid') {
+                whereClause[Op.and] = [
+                    ...(whereClause[Op.and] || []),
+                    sequelize.where(sequelize.literal('(CAST(Invoice.paidAmount AS DECIMAL(10,2)) + CAST(Invoice.setoffAmount AS DECIMAL(10,2)))'), '=', 0),
+                    { status: { [Op.ne]: 'Cancelled' } }
+                ];
+            }
+        }
+
         // Customer filter
         if (customerId && customerId !== 'all') {
             whereClause.customerId = customerId;
@@ -271,6 +297,7 @@ exports.getAllInvoices = async (req, res) => {
         // Outstanding filter
         if (outstanding === 'true') {
             whereClause[Op.and] = [
+                ...(whereClause[Op.and] || []),
                 sequelize.where(sequelize.col('Invoice.total'), '>', sequelize.col('Invoice.paidAmount'))
             ];
         }
