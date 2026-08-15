@@ -5,14 +5,27 @@ const { Op } = require('sequelize');
 // GET /api/dashboard/main-details
 exports.getMainDashboardDetails = async (req, res, next) => {
     try {
-        const { locationId } = req.query;
+        const { locationId, period = 'monthly' } = req.query;
         const now = new Date();
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-        const startOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const endOfLastMonth = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+
+        let startDate, previousStartDate, previousEndDate;
+
+        if (period === 'daily') {
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+            previousStartDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+            previousEndDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
+        } else if (period === 'weekly') {
+            startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            previousStartDate = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+            previousEndDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        } else {
+            // monthly (default)
+            startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+            previousStartDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+            previousEndDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+        }
 
         // 1. Total Inventory Value (Current Stock)
-        // Calculating total value from GRNItems that still have available quantity
         const inventoryValueResult = await db.GRNItem.findAll({
             where: { availableQty: { [Op.gt]: 0 } },
             attributes: [[db.sequelize.literal('SUM(GRNItem.availableQty * costPrice)'), 'totalValue']],
@@ -25,29 +38,44 @@ exports.getMainDashboardDetails = async (req, res, next) => {
         });
         const totalValue = parseFloat(inventoryValueResult[0]?.totalValue || 0);
 
-        // 2. Monthly Sales (Current month vs Last month)
-        const currentMonthSales = await db.Invoice.sum('total', {
+        // 2. Sales & Collections for Period (Current period vs Previous period)
+        const currentSales = await db.Invoice.sum('total', {
             where: {
-                invoiceDate: { [Op.gte]: startOfMonth },
+                invoiceDate: { [Op.gte]: startDate },
                 status: { [Op.ne]: 'Cancelled' },
                 ...(locationId && { locationId })
             }
         }) || 0;
 
-        const lastMonthSales = await db.Invoice.sum('total', {
+        const previousSales = await db.Invoice.sum('total', {
             where: {
-                invoiceDate: { [Op.between]: [startOfLastMonth, endOfLastMonth] },
+                invoiceDate: { [Op.between]: [previousStartDate, previousEndDate] },
                 status: { [Op.ne]: 'Cancelled' },
                 ...(locationId && { locationId })
             }
         }) || 0;
 
-        const salesGrowth = lastMonthSales === 0 ? 0 : ((currentMonthSales - lastMonthSales) / lastMonthSales) * 100;
+        const salesGrowth = previousSales === 0 ? 0 : ((currentSales - previousSales) / previousSales) * 100;
 
-        // 3. Active Customers (Customers who had invoices in the last 30 days)
-        // const thirtyDaysAgo = new Date();
-        // thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        const currentCollections = await db.Receipt.sum('totalPaid', {
+            where: {
+                receiptDate: { [Op.gte]: startDate },
+                isActive: { [Op.ne]: false },
+                ...(locationId && { locationId })
+            }
+        }) || 0;
 
+        const previousCollections = await db.Receipt.sum('totalPaid', {
+            where: {
+                receiptDate: { [Op.between]: [previousStartDate, previousEndDate] },
+                isActive: { [Op.ne]: false },
+                ...(locationId && { locationId })
+            }
+        }) || 0;
+
+        const collectionsGrowth = previousCollections === 0 ? 0 : ((currentCollections - previousCollections) / previousCollections) * 100;
+
+        // 3. Active Customers
         const activeCustomersCount = await db.Customer.count({
             col: 'id',
             where: {
@@ -56,17 +84,17 @@ exports.getMainDashboardDetails = async (req, res, next) => {
             }
         });
 
-        // 4. Total Orders (Sales Orders for the current month)
+        // 4. Total Orders (Sales Orders for the selected period)
         const totalOrdersCount = await db.SalesOrder.count({
             where: {
-                orderDate: { [Op.gte]: startOfMonth },
+                orderDate: { [Op.gte]: startDate },
                 status: { [Op.ne]: 'Cancelled' },
                 ...(locationId && { locationId })
             }
         });
         const pendingOrdersCount = await db.SalesOrder.count({
             where: {
-                orderDate: { [Op.gte]: startOfMonth },
+                orderDate: { [Op.gte]: startDate },
                 status: 'Pending',
                 ...(locationId && { locationId })
             }
@@ -84,7 +112,7 @@ exports.getMainDashboardDetails = async (req, res, next) => {
                 attributes: [],
                 where: {
                     storeId: { [Op.not]: null },
-                    lorryId: null, // Explicitly ignore lorry stock
+                    lorryId: null,
                     ...(locationId && { locationId })
                 }
             }],
@@ -97,37 +125,32 @@ exports.getMainDashboardDetails = async (req, res, next) => {
             subQuery: false
         });
 
-        // 6. Sales Trend (Last 6 months)
-        const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-        const salesTrend = await db.Invoice.findAll({
-            attributes: [
-                [db.sequelize.fn('DATE_FORMAT', db.sequelize.col('invoiceDate'), '%Y-%m'), 'monthKey'],
-                [db.sequelize.fn('DATE_FORMAT', db.sequelize.col('invoiceDate'), '%b'), 'month'],
-                [db.sequelize.fn('SUM', db.sequelize.col('total')), 'sales']
-            ],
-            where: {
-                invoiceDate: { [Op.gte]: sixMonthsAgo },
-                status: { [Op.ne]: 'Cancelled' },
-                ...(locationId && { locationId })
-            },
-            group: [
-                db.sequelize.fn('DATE_FORMAT', db.sequelize.col('invoiceDate'), '%Y-%m'),
-                db.sequelize.fn('DATE_FORMAT', db.sequelize.col('invoiceDate'), '%b')
-            ],
-            order: [[db.sequelize.fn('DATE_FORMAT', db.sequelize.col('invoiceDate'), '%Y-%m'), 'ASC']]
-        });
-
-        // 7. Delivery Order Status
+        // 6. Delivery Order & Sales Order Status breakdown for Period
         const deliveryStatusBreakdown = await db.DeliveryOrder.findAll({
             attributes: [
                 'status',
                 [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count']
             ],
-            where: locationId ? { locationId } : {},
+            where: {
+                createdAt: { [Op.gte]: startDate },
+                ...(locationId && { locationId })
+            },
             group: ['status']
         });
 
-        // 8. Top Inventory Items by Value
+        const salesStatusBreakdown = await db.SalesOrder.findAll({
+            attributes: [
+                'status',
+                [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count']
+            ],
+            where: {
+                orderDate: { [Op.gte]: startDate },
+                ...(locationId && { locationId })
+            },
+            group: ['status']
+        });
+
+        // 7. Top Inventory Items by Value
         const topItems = await db.GRNItem.findAll({
             where: { availableQty: { [Op.gt]: 0 } },
             attributes: [
@@ -150,9 +173,12 @@ exports.getMainDashboardDetails = async (req, res, next) => {
             order: [[db.sequelize.literal('totalValue'), 'DESC']],
         });
 
-        // 9. Recent Orders (Last 5 Invoices)
+        // 8. Recent Orders (Last 5 Invoices for Period)
         const recentOrders = await db.Invoice.findAll({
-            where: locationId ? { locationId } : {},
+            where: {
+                invoiceDate: { [Op.gte]: startDate },
+                ...(locationId && { locationId })
+            },
             limit: 5,
             order: [['invoiceDate', 'DESC']],
             include: [{
@@ -161,19 +187,110 @@ exports.getMainDashboardDetails = async (req, res, next) => {
             }]
         });
 
+        // 9. Sales vs Collections Chart Data
+        let chartLabels = [];
+        let salesChartData = [];
+        let collectionsChartData = [];
+
+        if (period === 'daily') {
+            for (let i = 6; i >= 0; i--) {
+                const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+                const dateStr = d.toISOString().slice(0, 10);
+                const label = d.toLocaleDateString('en-US', { day: '2-digit', month: 'short' });
+                chartLabels.push(label);
+
+                const daySales = await db.Invoice.sum('total', {
+                    where: {
+                        invoiceDate: { [Op.between]: [`${dateStr} 00:00:00`, `${dateStr} 23:59:59`] },
+                        status: { [Op.ne]: 'Cancelled' },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                const dayCollections = await db.Receipt.sum('totalPaid', {
+                    where: {
+                        receiptDate: { [Op.between]: [`${dateStr} 00:00:00`, `${dateStr} 23:59:59`] },
+                        isActive: { [Op.ne]: false },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                salesChartData.push(daySales);
+                collectionsChartData.push(dayCollections);
+            }
+        } else if (period === 'weekly') {
+            for (let i = 3; i >= 0; i--) {
+                const end = new Date(now.getTime() - i * 7 * 24 * 60 * 60 * 1000);
+                const start = new Date(end.getTime() - 6 * 24 * 60 * 60 * 1000);
+                const label = `${start.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })} - ${end.toLocaleDateString('en-US', { day: '2-digit', month: 'short' })}`;
+                chartLabels.push(label);
+
+                const weekSales = await db.Invoice.sum('total', {
+                    where: {
+                        invoiceDate: { [Op.between]: [start, end] },
+                        status: { [Op.ne]: 'Cancelled' },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                const weekCollections = await db.Receipt.sum('totalPaid', {
+                    where: {
+                        receiptDate: { [Op.between]: [start, end] },
+                        isActive: { [Op.ne]: false },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                salesChartData.push(weekSales);
+                collectionsChartData.push(weekCollections);
+            }
+        } else {
+            // monthly (default last 6 months)
+            for (let i = 5; i >= 0; i--) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+                const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+                chartLabels.push(label);
+
+                const monthSales = await db.Invoice.sum('total', {
+                    where: {
+                        invoiceDate: { [Op.between]: [d, monthEnd] },
+                        status: { [Op.ne]: 'Cancelled' },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                const monthCollections = await db.Receipt.sum('totalPaid', {
+                    where: {
+                        receiptDate: { [Op.between]: [d, monthEnd] },
+                        isActive: { [Op.ne]: false },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                salesChartData.push(monthSales);
+                collectionsChartData.push(monthCollections);
+            }
+        }
+
         res.json({
+            period,
             summary: {
                 totalInventoryValue: {
                     value: totalValue,
-                    trend: 12.5 // Placeholder
+                    trend: 12.5
                 },
                 monthlySales: {
-                    value: currentMonthSales,
+                    value: currentSales,
                     trend: parseFloat(salesGrowth.toFixed(1))
+                },
+                monthlyCollections: {
+                    value: currentCollections,
+                    trend: parseFloat(collectionsGrowth.toFixed(1))
                 },
                 activeCustomers: {
                     value: activeCustomersCount,
-                    trend: 8.2 // Placeholder
+                    trend: 8.2
                 },
                 totalOrders: {
                     value: totalOrdersCount,
@@ -191,11 +308,19 @@ exports.getMainDashboardDetails = async (req, res, next) => {
                 availableQty: item.dataValues.totalStoreQty || 0,
                 reorderLevelQty: item.reorderLevelQty
             })),
-            salesTrend,
+            salesVsCollections: {
+                labels: chartLabels,
+                sales: salesChartData,
+                collections: collectionsChartData
+            },
             deliveryOrderStatus: deliveryStatusBreakdown,
+            salesOrderStatus: salesStatusBreakdown,
             topInventoryItems: topItems,
             recentOrders
         });
+
+
+
 
     } catch (err) {
         console.error('Error in getMainDashboardDetails:', err);
