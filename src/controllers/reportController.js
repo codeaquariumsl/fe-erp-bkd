@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { sequelize, Supplier, Receipt, ReceiptInvoice, Invoice, InvoiceItem, User, CustomerReturn, CreditNote, PurchaseOrder, PurchaseOrderItem } = require('../models');
+const { sequelize, Supplier, Receipt, ReceiptInvoice, Invoice, InvoiceItem, User, CustomerReturn, CreditNote, PurchaseOrder, PurchaseOrderItem, SalesPersonCustomer } = require('../models');
 const Stock = require('../models/stock');
 const StockDetail = require('../models/stockDetail');
 const Item = require('../models/item');
@@ -2182,4 +2182,229 @@ exports.getSupplierWisePurchaseOrderReport = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
+// Customer Outstanding Report
+exports.getCustomerOutstandingReport = async (req, res) => {
+    try {
+        const {
+            customerId,
+            customerType,
+            salesPersonId,
+            locationId,
+            startDate,
+            endDate,
+            status = 'all',
+            page = 1,
+            limit = 20,
+            sortBy = 'outstanding',
+            sortOrder = 'DESC'
+        } = req.query;
+
+        const customerWhere = {};
+        if (customerId) customerWhere.id = customerId;
+        if (customerType) customerWhere.type = customerType;
+        if (locationId) customerWhere.locationId = locationId;
+
+        const invoiceWhere = {
+            status: { [Op.ne]: 'Cancelled' }
+        };
+        if (startDate && endDate) {
+            invoiceWhere.invoiceDate = { [Op.between]: [startDate, endDate] };
+        } else if (startDate) {
+            invoiceWhere.invoiceDate = { [Op.gte]: startDate };
+        } else if (endDate) {
+            invoiceWhere.invoiceDate = { [Op.lte]: endDate };
+        }
+        if (locationId) invoiceWhere.locationId = locationId;
+        if (salesPersonId) invoiceWhere.idSalesPerson = salesPersonId;
+
+        const customers = await Customer.findAll({
+            where: customerWhere,
+            include: [
+                {
+                    model: Invoice,
+                    as: 'Invoices',
+                    where: invoiceWhere,
+                    required: false,
+                    include: [
+
+                        {
+                            model: User,
+                            as: 'SalesPerson',
+                            attributes: ['id', 'fullName', 'username']
+                        }
+                    ]
+                },
+                {
+                    model: SalesPersonCustomer,
+                    as: 'SalesPeople',
+                    required: false,
+                    include: [
+                        {
+                            model: User,
+                            as: 'SalesPerson',
+                            attributes: ['id', 'fullName', 'username']
+                        }
+                    ]
+                }
+            ],
+            order: [['name', 'ASC']]
+        });
+
+        const today = new Date();
+
+        let customerRecords = customers.map(customer => {
+            const invoices = customer.Invoices || [];
+
+            let totalInvoiced = 0;
+            let totalPaid = 0;
+            let totalAdjustments = 0;
+            let totalOutstanding = 0;
+            let totalOverdue = 0;
+            let lastPaymentDate = null;
+
+            const aging = {
+                current: 0,
+                days1_30: 0,
+                days31_60: 0,
+                days61_90: 0,
+                days91_120: 0,
+                above120: 0
+            };
+
+            const processedInvoices = invoices.map(inv => {
+                const invTotal = parseFloat(inv.total || 0);
+                const invPaid = parseFloat(inv.paidAmount || 0);
+                const invSetoff = parseFloat(inv.setoffAmount || 0);
+                const invOutstanding = Math.max(0, invTotal - invPaid - invSetoff);
+
+                totalInvoiced += invTotal;
+                totalPaid += invPaid;
+                totalAdjustments += invSetoff;
+                totalOutstanding += invOutstanding;
+
+                const invDate = new Date(inv.invoiceDate);
+                const creditDays = customer.creditPeriod || 30;
+                const dueDate = new Date(invDate.getTime() + creditDays * 24 * 60 * 60 * 1000);
+
+                const isOverdue = invOutstanding > 0 && today > dueDate;
+                const diffTime = today.getTime() - dueDate.getTime();
+                const daysOverdue = isOverdue ? Math.floor(diffTime / (1000 * 60 * 60 * 24)) : 0;
+
+                if (isOverdue) {
+                    totalOverdue += invOutstanding;
+                    if (daysOverdue <= 0) aging.current += invOutstanding;
+                    else if (daysOverdue <= 30) aging.days1_30 += invOutstanding;
+                    else if (daysOverdue <= 60) aging.days31_60 += invOutstanding;
+                    else if (daysOverdue <= 90) aging.days61_90 += invOutstanding;
+                    else if (daysOverdue <= 120) aging.days91_120 += invOutstanding;
+                    else aging.above120 += invOutstanding;
+                } else if (invOutstanding > 0) {
+                    aging.current += invOutstanding;
+                }
+
+                if (inv.updatedAt) {
+                    const updateDate = new Date(inv.updatedAt);
+                    if (!lastPaymentDate || updateDate > lastPaymentDate) {
+                        lastPaymentDate = updateDate;
+                    }
+                }
+
+                return {
+                    id: inv.id,
+                    invoiceNumber: inv.invoiceNumber,
+                    invoiceDate: inv.invoiceDate,
+                    dueDate: dueDate.toISOString(),
+                    totalAmount: invTotal,
+                    paidAmount: invPaid,
+                    setoffAmount: invSetoff,
+                    outstandingAmount: invOutstanding,
+                    daysOverdue,
+                    isOverdue,
+                    status: inv.status,
+                    salesPerson: inv.SalesPerson ? inv.SalesPerson.fullName : 'Unassigned'
+                };
+            });
+
+            const assignedRep = customer.SalesPeople && customer.SalesPeople.length > 0
+                ? customer.SalesPeople[0].SalesPerson?.fullName
+                : 'Unassigned';
+
+            const recordStatus = totalOutstanding > 0 ? 'Outstanding' : 'Fully Paid';
+
+            return {
+                customerId: customer.id,
+                customerCode: `CUST-${String(customer.id).padStart(4, '0')}`,
+                customerName: customer.name,
+                customerType: customer.type || 'Standard',
+                contactPerson: customer.contactPerson || '-',
+                contactNumber: customer.contactNumber || '-',
+                creditLimit: customer.creditLimit || 0,
+                creditPeriod: customer.creditPeriod || 30,
+                salesPerson: assignedRep,
+                totalInvoiced: Math.round(totalInvoiced * 100) / 100,
+                totalPaid: Math.round(totalPaid * 100) / 100,
+                adjustments: Math.round(totalAdjustments * 100) / 100,
+                outstanding: Math.round(totalOutstanding * 100) / 100,
+                overdue: Math.round(totalOverdue * 100) / 100,
+                lastPaymentDate: lastPaymentDate ? lastPaymentDate.toISOString().slice(0, 10) : null,
+                status: recordStatus,
+                aging,
+                invoices: processedInvoices
+            };
+        });
+
+        customerRecords = customerRecords.filter(r => r.totalInvoiced > 0 || r.outstanding > 0);
+
+        if (status === 'outstanding') {
+            customerRecords = customerRecords.filter(r => r.outstanding > 0);
+        } else if (status === 'paid') {
+            customerRecords = customerRecords.filter(r => r.outstanding === 0 && r.totalInvoiced > 0);
+        }
+
+        const orderMult = sortOrder.toUpperCase() === 'ASC' ? 1 : -1;
+        customerRecords.sort((a, b) => {
+            if (sortBy === 'customerName') return a.customerName.localeCompare(b.customerName) * orderMult;
+            if (sortBy === 'totalInvoiced') return (a.totalInvoiced - b.totalInvoiced) * orderMult;
+            if (sortBy === 'totalPaid') return (a.totalPaid - b.totalPaid) * orderMult;
+            if (sortBy === 'overdue') return (a.overdue - b.overdue) * orderMult;
+            if (sortBy === 'lastPaymentDate') return ((a.lastPaymentDate || '') > (b.lastPaymentDate || '') ? 1 : -1) * orderMult;
+            return (a.outstanding - b.outstanding) * orderMult;
+        });
+
+        const summary = {
+            totalCustomers: customerRecords.length,
+            totalInvoiced: customerRecords.reduce((sum, r) => sum + r.totalInvoiced, 0),
+            totalPaid: customerRecords.reduce((sum, r) => sum + r.totalPaid, 0),
+            totalOutstanding: customerRecords.reduce((sum, r) => sum + r.outstanding, 0),
+            totalOverdue: customerRecords.reduce((sum, r) => sum + r.overdue, 0)
+        };
+
+        const totalRecords = customerRecords.length;
+        let paginatedRecords = customerRecords;
+        
+        if (req.query.page && req.query.limit) {
+            const pageNum = parseInt(page) || 1;
+            const limitNum = parseInt(limit) || 20;
+            paginatedRecords = customerRecords.slice((pageNum - 1) * limitNum, pageNum * limitNum);
+        }
+
+        res.json({
+            summary,
+            pagination: {
+                totalRecords,
+                totalPages: req.query.limit ? Math.ceil(totalRecords / parseInt(limit)) || 1 : 1,
+                currentPage: parseInt(page) || 1,
+                limit: req.query.limit ? parseInt(limit) : totalRecords
+            },
+            data: paginatedRecords
+        });
+
+
+    } catch (error) {
+        console.error('Error in getCustomerOutstandingReport:', error);
+        res.status(500).json({ error: error.message });
+    }
+};
+
 

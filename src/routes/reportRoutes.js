@@ -37,6 +37,8 @@ router.get('/sales/date-range', reportController.getSalesByDateRangeReport);
 router.get('/sales/top-items', reportController.getTopSellingItemsReport);
 router.get('/sales/salesperson-commission', reportController.getSalespersonCommissionReport);
 router.get('/sales/sales-person/:salesPersonId', reportController.getSalesBySalesPersonReport);
+router.get('/customer-outstanding', reportController.getCustomerOutstandingReport);
+
 
 // Dashboard Reports
 router.get('/low-stock-items', reportController.getLowStockItemsReport);

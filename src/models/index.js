@@ -148,6 +148,7 @@ Customer.belongsTo(Route, { foreignKey: 'routeId', as: 'route' });
 Route.hasMany(Customer, { foreignKey: 'routeId', as: 'customers' });
 Customer.hasMany(SalesOrder, { foreignKey: 'customerId' });
 Customer.hasMany(DeliveryOrder, { foreignKey: 'customerId' });
+Customer.hasMany(Invoice, { foreignKey: 'customerId', as: 'Invoices' });
 
 Supplier.hasMany(PurchaseOrder, { foreignKey: 'supplierId' });
 PurchaseOrder.belongsTo(Supplier, { foreignKey: 'supplierId' });
@@ -189,6 +190,8 @@ DeliveryOrderItem.belongsTo(Store, { foreignKey: 'storeId', as: 'ReleaseStore' }
 
 
 Invoice.belongsTo(Customer, { foreignKey: 'customerId' });
+
+
 Invoice.belongsTo(SalesOrder, { foreignKey: 'salesOrderId' });
 Invoice.belongsTo(DeliveryOrder, { foreignKey: 'deliveryOrderId' });
 Invoice.hasMany(InvoiceItem, { foreignKey: 'invoiceId' });
