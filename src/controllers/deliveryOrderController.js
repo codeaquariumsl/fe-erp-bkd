@@ -383,35 +383,70 @@ exports.updateDeliveryOrder = async (req, res) => {
 
             // Process each item from the request
             for (const item of items) {
-                if (item.id) {
-                    // Update existing item
-                    const existingItem = existingItems.find(ei => ei.id === item.id);
-                    if (existingItem) {
-                        await existingItem.update({
-                            itemId: item.itemId !== undefined ? item.itemId : existingItem.itemId,
-                            qty: item.qty !== undefined ? item.qty : existingItem.qty,
-                            batchId: item.batchId !== undefined ? item.batchId : existingItem.batchId,
-                            storeId: item.storeId !== undefined ? item.storeId : existingItem.storeId,
-                            acceptedQty: item.acceptedQty !== undefined ? item.acceptedQty : existingItem.acceptedQty,
-                            rejectedQty: item.rejectedQty !== undefined ? item.rejectedQty : existingItem.rejectedQty,
-                            damagedQty: item.damagedQty !== undefined ? item.damagedQty : existingItem.damagedQty,
-                            weightDiffQty: item.weightDiffQty !== undefined ? item.weightDiffQty : existingItem.weightDiffQty
-                        }, { transaction: t });
-                        if (item.qty !== undefined) {
-                            await DeliveryOrderSummaryItem.update(
-                                { qty: item.qty },
-                                { where: { deliveryOrderItemId: existingItem.id }, transaction: t }
-                            );
+                // Find existing item by id if provided, or by itemId if id is not provided
+                const existingItem = item.id
+                    ? existingItems.find(ei => ei.id === item.id)
+                    : existingItems.find(ei => ei.itemId === item.itemId && !updatedItemIds.includes(ei.id));
+
+                if (existingItem) {
+                    // Determine freeQty: prefer explicit item.freeQty or item.freeIssueQty, otherwise preserve existingItem.freeQty
+                    let itemFreeQty = item.freeQty !== undefined
+                        ? item.freeQty
+                        : (item.freeIssueQty !== undefined ? item.freeIssueQty : existingItem.freeQty);
+
+                    // If freeQty is 0 and delivery order has a salesOrderId, look up SalesOrderItem as fallback
+                    if ((itemFreeQty === 0 || itemFreeQty === null || itemFreeQty === undefined) && deliveryOrder.salesOrderId) {
+                        const SalesOrderItem = require('../models/salesOrderItem');
+                        const soItem = await SalesOrderItem.findOne({
+                            where: { salesOrderId: deliveryOrder.salesOrderId, itemId: existingItem.itemId },
+                            transaction: t
+                        });
+                        if (soItem && soItem.freeIssueQty) {
+                            itemFreeQty = soItem.freeIssueQty;
                         }
-                        updatedItemIds.push(item.id);
                     }
+
+                    await existingItem.update({
+                        itemId: item.itemId !== undefined ? item.itemId : existingItem.itemId,
+                        qty: item.qty !== undefined ? item.qty : existingItem.qty,
+                        freeQty: itemFreeQty !== undefined ? itemFreeQty : 0,
+                        batchId: item.batchId !== undefined ? item.batchId : existingItem.batchId,
+                        storeId: item.storeId !== undefined ? item.storeId : existingItem.storeId,
+                        acceptedQty: item.acceptedQty !== undefined ? item.acceptedQty : existingItem.acceptedQty,
+                        rejectedQty: item.rejectedQty !== undefined ? item.rejectedQty : existingItem.rejectedQty,
+                        damagedQty: item.damagedQty !== undefined ? item.damagedQty : existingItem.damagedQty,
+                        weightDiffQty: item.weightDiffQty !== undefined ? item.weightDiffQty : existingItem.weightDiffQty
+                    }, { transaction: t });
+
+                    if (item.qty !== undefined || itemFreeQty !== undefined) {
+                        await DeliveryOrderSummaryItem.update(
+                            {
+                                ...(item.qty !== undefined && { qty: item.qty }),
+                                ...(itemFreeQty !== undefined && { freeQty: itemFreeQty })
+                            },
+                            { where: { deliveryOrderItemId: existingItem.id }, transaction: t }
+                        );
+                    }
+                    updatedItemIds.push(existingItem.id);
                 } else {
                     // Create new item
+                    let itemFreeQty = item.freeQty !== undefined ? item.freeQty : (item.freeIssueQty || 0);
+                    if ((itemFreeQty === 0 || itemFreeQty === null || itemFreeQty === undefined) && deliveryOrder.salesOrderId) {
+                        const SalesOrderItem = require('../models/salesOrderItem');
+                        const soItem = await SalesOrderItem.findOne({
+                            where: { salesOrderId: deliveryOrder.salesOrderId, itemId: item.itemId },
+                            transaction: t
+                        });
+                        if (soItem && soItem.freeIssueQty) {
+                            itemFreeQty = soItem.freeIssueQty;
+                        }
+                    }
+
                     const newItem = await DeliveryOrderItem.create({
                         deliveryOrderId: deliveryOrder.id,
                         itemId: item.itemId,
                         qty: item.qty,
-                        freeQty: item.freeQty !== undefined ? item.freeQty : (item.freeIssueQty || 0),
+                        freeQty: itemFreeQty || 0,
                         batchId: item.batchId || null,
                         storeId: item.storeId || null,
                         acceptedQty: item.acceptedQty || 0,
@@ -656,7 +691,7 @@ exports.approveOrRejectDeliveryOrder = async (req, res) => {
                 // Calculate total (quantity * excluding tax amount)
                 const itemTotal = item.qty * excludingTaxAmount;
 
-                const freeQty = item.freeQty !== undefined ? item.freeQty : (soItem ? (soItem.freeIssueQty || 0) : 0);
+                const freeQty = (item.freeQty && item.freeQty > 0) ? item.freeQty : (soItem ? (soItem.freeIssueQty || 0) : 0);
                 await InvoiceItem.create({
                     invoiceId: invoice.id,
                     itemId: item.itemId,

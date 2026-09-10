@@ -172,8 +172,10 @@ exports.getAllSalesOrders = async (req, res) => {
 
         // ── Pagination ────────────────────────────────────────────────────────
         const pageNum = Math.max(1, parseInt(page) || 1);
-        const limitNum = Math.min(500, Math.max(1, parseInt(limit) || 0)); // 0 = no pagination
-        const usePagination = limitNum > 0;
+        const hasLimit = limit !== undefined && limit !== null && limit !== '' && !isNaN(parseInt(limit));
+        const parsedLimit = hasLimit ? parseInt(limit) : 0;
+        const usePagination = parsedLimit > 0;
+        const limitNum = usePagination ? Math.min(500, parsedLimit) : 0;
 
         // ── Where clause ──────────────────────────────────────────────────────
         const whereClause = {};
@@ -305,38 +307,76 @@ exports.getAllSalesOrders = async (req, res) => {
         const userMap = {};
         users.forEach(u => { userMap[u.id] = { username: u.username, fullName: u.fullName }; });
 
-        // ── Enrich each order with DO status + CustomerItemCode ───────────────
+        // ── Batch fetch CustomerItemCodes to avoid N*M queries ───────────────
+        const customerIdsToFetch = new Set();
+        const itemIdsToFetch = new Set();
+        const ordersWithoutDOs = [];
+
+        orders.forEach(order => {
+            if (order.customerId) customerIdsToFetch.add(order.customerId);
+            if (order.Customer?.parentId) customerIdsToFetch.add(order.Customer.parentId);
+            (order.SalesOrderItems || []).forEach(item => {
+                if (item.itemId) itemIdsToFetch.add(item.itemId);
+            });
+            if (!order.DeliveryOrders || order.DeliveryOrders.length === 0) {
+                ordersWithoutDOs.push(order.id);
+            }
+        });
+
+        const customerCodeMap = new Map();
+        if (customerIdsToFetch.size > 0 && itemIdsToFetch.size > 0) {
+            const customerCodes = await CustomerItemCode.findAll({
+                where: {
+                    customerId: { [Op.in]: Array.from(customerIdsToFetch) },
+                    itemId: { [Op.in]: Array.from(itemIdsToFetch) },
+                    isActive: true,
+                    ...(req.query.locationId ? { locationId: req.query.locationId } : {})
+                },
+                attributes: ['id', 'code', 'customerId', 'itemId', 'locationId']
+            });
+            customerCodes.forEach(cic => {
+                customerCodeMap.set(`${cic.customerId}_${cic.itemId}`, cic);
+            });
+        }
+
+        // ── Batch fetch missing DeliveryOrders ────────────────────────────────
+        const doMap = new Map();
+        if (ordersWithoutDOs.length > 0) {
+            const batchDOs = await DeliveryOrder.findAll({
+                where: { salesOrderId: { [Op.in]: ordersWithoutDOs } },
+                attributes: ['id', 'salesOrderId', 'status']
+            });
+            batchDOs.forEach(d => {
+                if (!doMap.has(d.salesOrderId)) {
+                    doMap.set(d.salesOrderId, d.status);
+                }
+            });
+        }
+
+        // ── Enrich each order with DO status + CustomerItemCode (in-memory) ───
         const transformedSalesOrders = [];
 
         for (const order of orders) {
-            // Delivery order status — use already-loaded association when available
             const preloadedDOs = order.DeliveryOrders || [];
-            const deliveryOrders = preloadedDOs.length > 0
-                ? preloadedDOs
-                : await DeliveryOrder.findAll({ where: { salesOrderId: order.id } });
-            order.dataValues.deliveryOrderStatus = (deliveryOrders && deliveryOrders.length > 0)
-                ? (deliveryOrders[0].status || deliveryOrders[0].dataValues?.status)
-                : null;
+            const doStatus = preloadedDOs.length > 0
+                ? (preloadedDOs[0].status || preloadedDOs[0].dataValues?.status)
+                : (doMap.get(order.id) || null);
+            order.dataValues.deliveryOrderStatus = doStatus;
 
             const soData = order.toJSON();
             const user = userMap[soData.createdBy];
             soData.createdUserName = user ? user.username : null;
             soData.createdUserFullName = user ? user.fullName : null;
+            soData.deliveryOrderStatus = doStatus;
 
-            // Enhance items with CustomerItemCode
+            // Enhance items with pre-fetched CustomerItemCode
             if (soData.SalesOrderItems && soData.SalesOrderItems.length > 0) {
                 const enhancedItems = [];
                 for (const orderItem of soData.SalesOrderItems) {
-                    const customerItemCode = await CustomerItemCode.findOne({
-                        where: { customerId: soData.customerId, itemId: orderItem.itemId, isActive: true },
-                        attributes: ['id', 'code', 'customerId', 'itemId', 'locationId']
-                    });
+                    const customerItemCode = customerCodeMap.get(`${soData.customerId}_${orderItem.itemId}`) || null;
                     let parentCustomerItemCode = null;
-                    if (!customerItemCode && soData.Customer && soData.Customer.parentId) {
-                        parentCustomerItemCode = await CustomerItemCode.findOne({
-                            where: { customerId: soData.Customer.parentId, itemId: orderItem.itemId, isActive: true },
-                            attributes: ['id', 'code', 'customerId', 'itemId', 'locationId']
-                        });
+                    if (!customerItemCode && soData.Customer?.parentId) {
+                        parentCustomerItemCode = customerCodeMap.get(`${soData.Customer.parentId}_${orderItem.itemId}`) || null;
                     }
                     enhancedItems.push({
                         ...orderItem,
@@ -355,24 +395,29 @@ exports.getAllSalesOrders = async (req, res) => {
         const totalPages = usePagination ? Math.ceil(count / limitNum) : 1;
 
         // ── Calculate Summary Stats ───────────────────────────────────────────
-        const allQueryOptions = {
-            where: whereClause,
-            include: [
-                { model: Customer, attributes: [] },
-                {
-                    model: User,
-                    as: 'SalesPerson',
-                    attributes: [],
-                    ...(salesPersonId && salesPersonId !== 'ALL'
-                        ? { where: { id: salesPersonId }, required: true }
-                        : {})
-                },
-                deliveryOrderInclude,
-            ],
-            attributes: ['id', 'status', 'totalAmount'],
-            distinct: true,
-        };
-        const allFilteredOrders = await SalesOrder.findAll(allQueryOptions);
+        let allFilteredOrders;
+        if (!usePagination) {
+            allFilteredOrders = orders;
+        } else {
+            const allQueryOptions = {
+                where: whereClause,
+                include: [
+                    { model: Customer, attributes: [] },
+                    {
+                        model: User,
+                        as: 'SalesPerson',
+                        attributes: [],
+                        ...(salesPersonId && salesPersonId !== 'ALL'
+                            ? { where: { id: salesPersonId }, required: true }
+                            : {})
+                    },
+                    deliveryOrderInclude,
+                ],
+                attributes: ['id', 'status', 'totalAmount'],
+                distinct: true,
+            };
+            allFilteredOrders = await SalesOrder.findAll(allQueryOptions);
+        }
 
         let totalAmountSummary = 0;
         let totalApprovedCount = 0;
@@ -675,7 +720,7 @@ exports.updateSalesOrder = async (req, res) => {
                     price: item.price,
                     discount: discount,
                     isTaxItem: item.isTaxItem || false,
-                    freeIssueQty: item.freeIssueQty || 0,
+                    freeIssueQty: item.freeIssueQty !== undefined ? item.freeIssueQty : (item.freeQty || 0),
                     discountedAmount: item.discountedAmount,
                     excludingTaxAmount: item.excludingTaxAmount,
                     total: item.total,
@@ -786,7 +831,7 @@ exports.approveOrRejectSalesOrder = async (req, res) => {
                     deliveryOrderId: deliveryOrder.id,
                     itemId: soItem.itemId,
                     qty: soItem.qty,
-                    freeQty: soItem.freeIssueQty || 0
+                    freeQty: soItem.freeIssueQty !== undefined ? soItem.freeIssueQty : (soItem.freeQty || 0)
                 }, { transaction: t });
             }
 
