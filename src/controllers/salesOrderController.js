@@ -424,6 +424,8 @@ exports.getAllSalesOrders = async (req, res) => {
         let totalApprovedAmount = 0;
         let totalPendingCount = 0;
         let totalPendingAmount = 0;
+        let totalDeliveredCount = 0;
+        let totalDeliveredAmount = 0;
 
         for (const o of allFilteredOrders) {
             const amt = Number(o.totalAmount) || 0;
@@ -434,6 +436,15 @@ exports.getAllSalesOrders = async (req, res) => {
             } else if (o.status === 'Pending') {
                 totalPendingCount++;
                 totalPendingAmount += amt;
+            }
+
+            const dos = o.DeliveryOrders || [];
+            const isDelivered = dos.some(d => (d.status || d.dataValues?.status) === 'Delivered')
+                || o.deliveryOrderStatus === 'Delivered'
+                || (o.dataValues && o.dataValues.deliveryOrderStatus === 'Delivered');
+            if (isDelivered) {
+                totalDeliveredCount++;
+                totalDeliveredAmount += amt;
             }
         }
 
@@ -452,7 +463,9 @@ exports.getAllSalesOrders = async (req, res) => {
                 totalApprovedCount,
                 totalApprovedAmount,
                 totalPendingCount,
-                totalPendingAmount
+                totalPendingAmount,
+                totalDeliveredCount,
+                totalDeliveredAmount
             }
         });
     } catch (error) {
