@@ -81,6 +81,41 @@ exports.getMainDashboardDetails = async (req, res, next) => {
 
         const collectionsGrowth = previousCollections === 0 ? 0 : ((currentCollections - previousCollections) / previousCollections) * 100;
 
+        // 2b. Customer Outstanding (Receivables)
+        const periodOutstandingResult = await db.Invoice.findAll({
+            where: {
+                ...invoiceDateFilter,
+                status: { [Op.ne]: 'Cancelled' },
+                ...(locationId && { locationId })
+            },
+            attributes: [
+                [db.sequelize.literal('SUM(GREATEST(0, total - COALESCE(paidAmount, 0) - COALESCE(setoffAmount, 0)))'), 'totalOutstanding'],
+                [db.sequelize.literal('COUNT(CASE WHEN total - COALESCE(paidAmount, 0) - COALESCE(setoffAmount, 0) > 0.01 THEN 1 END)'), 'unpaidCount'],
+                [db.sequelize.literal('SUM(COALESCE(setoffAmount, 0))'), 'totalSetoff']
+            ],
+            raw: true
+        });
+        const periodOutstanding = parseFloat(periodOutstandingResult[0]?.totalOutstanding || 0);
+        const periodUnpaidCount = parseInt(periodOutstandingResult[0]?.unpaidCount || 0);
+        const periodSetoff = parseFloat(periodOutstandingResult[0]?.totalSetoff || 0);
+
+        // Overall total outstanding across all time
+        const overallOutstandingResult = await db.Invoice.findAll({
+            where: {
+                status: { [Op.ne]: 'Cancelled' },
+                ...(locationId && { locationId })
+            },
+            attributes: [
+                [db.sequelize.literal('SUM(GREATEST(0, total - COALESCE(paidAmount, 0) - COALESCE(setoffAmount, 0)))'), 'totalOutstanding'],
+                [db.sequelize.literal('COUNT(CASE WHEN total - COALESCE(paidAmount, 0) - COALESCE(setoffAmount, 0) > 0.01 THEN 1 END)'), 'unpaidCount'],
+                [db.sequelize.literal('SUM(COALESCE(setoffAmount, 0))'), 'totalSetoff']
+            ],
+            raw: true
+        });
+        const overallOutstanding = parseFloat(overallOutstandingResult[0]?.totalOutstanding || 0);
+        const overallUnpaidCount = parseInt(overallOutstandingResult[0]?.unpaidCount || 0);
+        const overallSetoff = parseFloat(overallOutstandingResult[0]?.totalSetoff || 0);
+
         // 3. Active Customers
         const activeCustomersCount = await db.Customer.count({
             col: 'id',
@@ -321,6 +356,14 @@ exports.getMainDashboardDetails = async (req, res, next) => {
                 monthlyCollections: {
                     value: currentCollections,
                     trend: parseFloat(collectionsGrowth.toFixed(1))
+                },
+                totalOutstanding: {
+                    value: period === 'all' ? overallOutstanding : periodOutstanding,
+                    overallValue: overallOutstanding,
+                    unpaidInvoices: period === 'all' ? overallUnpaidCount : periodUnpaidCount,
+                    totalUnpaidInvoices: overallUnpaidCount,
+                    creditNotesDeducted: period === 'all' ? overallSetoff : periodSetoff,
+                    totalCreditNotesDeducted: overallSetoff
                 },
                 activeCustomers: {
                     value: activeCustomersCount,
