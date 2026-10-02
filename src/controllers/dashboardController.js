@@ -18,6 +18,10 @@ exports.getMainDashboardDetails = async (req, res, next) => {
             startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
             previousStartDate = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
             previousEndDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        } else if (period === 'all') {
+            startDate = null;
+            previousStartDate = null;
+            previousEndDate = null;
         } else {
             // monthly (default)
             startDate = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -39,39 +43,41 @@ exports.getMainDashboardDetails = async (req, res, next) => {
         const totalValue = parseFloat(inventoryValueResult[0]?.totalValue || 0);
 
         // 2. Sales & Collections for Period (Current period vs Previous period)
+        const invoiceDateFilter = startDate ? { invoiceDate: { [Op.gte]: startDate } } : {};
         const currentSales = await db.Invoice.sum('total', {
             where: {
-                invoiceDate: { [Op.gte]: startDate },
+                ...invoiceDateFilter,
                 status: { [Op.ne]: 'Cancelled' },
                 ...(locationId && { locationId })
             }
         }) || 0;
 
-        const previousSales = await db.Invoice.sum('total', {
+        const previousSales = previousStartDate ? ((await db.Invoice.sum('total', {
             where: {
                 invoiceDate: { [Op.between]: [previousStartDate, previousEndDate] },
                 status: { [Op.ne]: 'Cancelled' },
                 ...(locationId && { locationId })
             }
-        }) || 0;
+        })) || 0) : 0;
 
         const salesGrowth = previousSales === 0 ? 0 : ((currentSales - previousSales) / previousSales) * 100;
 
+        const receiptDateFilter = startDate ? { receiptDate: { [Op.gte]: startDate } } : {};
         const currentCollections = await db.Receipt.sum('totalPaid', {
             where: {
-                receiptDate: { [Op.gte]: startDate },
+                ...receiptDateFilter,
                 isActive: { [Op.ne]: false },
                 ...(locationId && { locationId })
             }
         }) || 0;
 
-        const previousCollections = await db.Receipt.sum('totalPaid', {
+        const previousCollections = previousStartDate ? ((await db.Receipt.sum('totalPaid', {
             where: {
                 receiptDate: { [Op.between]: [previousStartDate, previousEndDate] },
                 isActive: { [Op.ne]: false },
                 ...(locationId && { locationId })
             }
-        }) || 0;
+        })) || 0) : 0;
 
         const collectionsGrowth = previousCollections === 0 ? 0 : ((currentCollections - previousCollections) / previousCollections) * 100;
 
@@ -85,16 +91,17 @@ exports.getMainDashboardDetails = async (req, res, next) => {
         });
 
         // 4. Total Orders (Sales Orders for the selected period)
+        const orderDateFilter = startDate ? { orderDate: { [Op.gte]: startDate } } : {};
         const totalOrdersCount = await db.SalesOrder.count({
             where: {
-                orderDate: { [Op.gte]: startDate },
+                ...orderDateFilter,
                 status: { [Op.ne]: 'Cancelled' },
                 ...(locationId && { locationId })
             }
         });
         const pendingOrdersCount = await db.SalesOrder.count({
             where: {
-                orderDate: { [Op.gte]: startDate },
+                ...orderDateFilter,
                 status: 'Pending',
                 ...(locationId && { locationId })
             }
@@ -126,13 +133,14 @@ exports.getMainDashboardDetails = async (req, res, next) => {
         });
 
         // 6. Delivery Order & Sales Order Status breakdown for Period
+        const deliveryCreatedAtFilter = startDate ? { createdAt: { [Op.gte]: startDate } } : {};
         const deliveryStatusBreakdown = await db.DeliveryOrder.findAll({
             attributes: [
                 'status',
                 [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count']
             ],
             where: {
-                createdAt: { [Op.gte]: startDate },
+                ...deliveryCreatedAtFilter,
                 ...(locationId && { locationId })
             },
             group: ['status']
@@ -144,7 +152,7 @@ exports.getMainDashboardDetails = async (req, res, next) => {
                 [db.sequelize.fn('COUNT', db.sequelize.col('id')), 'count']
             ],
             where: {
-                orderDate: { [Op.gte]: startDate },
+                ...orderDateFilter,
                 ...(locationId && { locationId })
             },
             group: ['status']
@@ -176,7 +184,7 @@ exports.getMainDashboardDetails = async (req, res, next) => {
         // 8. Recent Orders (Last 5 Invoices for Period)
         const recentOrders = await db.Invoice.findAll({
             where: {
-                invoiceDate: { [Op.gte]: startDate },
+                ...invoiceDateFilter,
                 ...(locationId && { locationId })
             },
             limit: 5,
@@ -243,6 +251,32 @@ exports.getMainDashboardDetails = async (req, res, next) => {
 
                 salesChartData.push(weekSales);
                 collectionsChartData.push(weekCollections);
+            }
+        } else if (period === 'all') {
+            for (let i = 11; i >= 0; i--) {
+                const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
+                const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+                chartLabels.push(label);
+
+                const monthSales = await db.Invoice.sum('total', {
+                    where: {
+                        invoiceDate: { [Op.between]: [d, monthEnd] },
+                        status: { [Op.ne]: 'Cancelled' },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                const monthCollections = await db.Receipt.sum('totalPaid', {
+                    where: {
+                        receiptDate: { [Op.between]: [d, monthEnd] },
+                        isActive: { [Op.ne]: false },
+                        ...(locationId && { locationId })
+                    }
+                }) || 0;
+
+                salesChartData.push(monthSales);
+                collectionsChartData.push(monthCollections);
             }
         } else {
             // monthly (default last 6 months)
