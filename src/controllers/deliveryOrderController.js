@@ -272,7 +272,8 @@ exports.getAllDeliveryOrders = async (req, res) => {
             Delivered: 0,
             Dispatched: 0,
             Finalized: 0,
-            Failed: 0
+            Failed: 0,
+            Cancelled: 0
         };
 
         statusCounts.forEach(sc => {
@@ -758,6 +759,146 @@ exports.approveOrRejectDeliveryOrder = async (req, res) => {
         console.log(error);
         await t.rollback();
         res.status(400).json({ error: error.message });
+    }
+};
+
+// Cancel an Approved Delivery Order
+exports.cancelDeliveryOrder = async (req, res) => {
+    const t = await sequelize.transaction();
+    try {
+        const { id } = req.params;
+        const { cancelReason } = req.body || {};
+
+        if (!cancelReason || !cancelReason.trim()) {
+            await t.rollback();
+            return res.status(400).json({ error: 'Cancellation reason is required' });
+        }
+
+        const currentUserId = (req.user && req.user.id) || (req.body && req.body.user && req.body.user.id) || null;
+        if (!currentUserId) {
+            await t.rollback();
+            return res.status(401).json({ error: 'Unauthorized: missing user context' });
+        }
+
+        const order = await DeliveryOrder.findByPk(id, { transaction: t });
+        if (!order) {
+            await t.rollback();
+            return res.status(404).json({ error: 'Delivery Order not found' });
+        }
+
+        if (order.status === 'Cancelled') {
+            await t.rollback();
+            return res.status(400).json({ error: 'Delivery Order is already cancelled' });
+        }
+
+        if (order.status !== 'Approved') {
+            await t.rollback();
+            return res.status(400).json({ error: `Only Approved Delivery Orders can be cancelled. Current status is ${order.status}` });
+        }
+
+        const trimmedReason = cancelReason.trim();
+
+        // 1. Check if there is an associated Invoice and handle it
+        const Invoice = require('../models/invoice');
+        const existingInvoice = await Invoice.findOne({
+            where: { deliveryOrderId: order.id },
+            transaction: t
+        });
+
+        if (existingInvoice) {
+            // Check if any receipts/payments are recorded
+            const ReceiptInvoice = require('../models/receiptInvoice');
+            let receiptCount = 0;
+            try {
+                receiptCount = await ReceiptInvoice.count({
+                    where: { invoiceId: existingInvoice.id },
+                    transaction: t
+                });
+            } catch (e) {
+                // Ignore if ReceiptInvoice model count is not applicable
+            }
+
+            if (receiptCount > 0 || parseFloat(existingInvoice.paidAmount || 0) > 0) {
+                await t.rollback();
+                return res.status(400).json({
+                    error: 'Cannot cancel Delivery Order because associated invoice has received payments or receipts.'
+                });
+            }
+
+            // Cancel the associated invoice
+            await existingInvoice.update({
+                status: 'Cancelled',
+                cancelReason: `Delivery Order ${order.doNumber} cancelled: ${trimmedReason}`,
+                updatedBy: currentUserId
+            }, { transaction: t });
+        }
+
+        // 2. Release any reserved summary items if present
+        const summaryItemsToDelete = await DeliveryOrderSummaryItem.findAll({
+            where: { deliveryOrderId: order.id, isActive: true },
+            transaction: t
+        });
+
+        if (summaryItemsToDelete.length > 0) {
+            const reservationsToRelease = new Map();
+            for (const summaryItem of summaryItemsToDelete) {
+                const grnId = summaryItem.grnId;
+                const qty = summaryItem.qty;
+                reservationsToRelease.set(grnId, (reservationsToRelease.get(grnId) || 0) + qty);
+            }
+
+            for (const [grnId, totalQtyToRelease] of reservationsToRelease) {
+                const summaryItemExample = summaryItemsToDelete.find(item => item.grnId === grnId);
+                if (summaryItemExample) {
+                    const grnItem = await GRNItem.findOne({
+                        where: {
+                            grnId,
+                            itemId: summaryItemExample.itemId
+                        },
+                        transaction: t
+                    });
+
+                    if (grnItem && totalQtyToRelease > 0) {
+                        await releaseGrnItemQty(grnItem, totalQtyToRelease, t);
+                    }
+                }
+            }
+
+            await DeliveryOrderSummaryItem.destroy({
+                where: { deliveryOrderId: order.id },
+                transaction: t
+            });
+        }
+
+        // 3. Update Delivery Order to Cancelled
+        await order.update({
+            status: 'Cancelled',
+            cancelReason: trimmedReason,
+            updatedBy: currentUserId
+        }, { transaction: t });
+
+        // 4. Cancel related Sales Order
+        if (order.salesOrderId) {
+            const salesOrder = await SalesOrder.findByPk(order.salesOrderId, { transaction: t });
+            if (salesOrder && salesOrder.status !== 'Cancelled') {
+                await salesOrder.update({
+                    status: 'Cancelled',
+                    cancelReason: `DO ${order.doNumber} cancelled: ${trimmedReason}`,
+                    updatedBy: currentUserId
+                }, { transaction: t });
+            }
+        }
+
+        await t.commit();
+
+        res.json({
+            message: 'Delivery Order cancelled successfully',
+            order
+        });
+    } catch (error) {
+        await t.rollback();
+        console.error('Error cancelling delivery order:', error);
+        res.status(500).json({ error: error.message });
     }
 };
 

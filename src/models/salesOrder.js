@@ -38,6 +38,7 @@ const SalesOrder = sequelize.define('SalesOrder', {
     },
     idSalesPerson: { type: DataTypes.INTEGER, allowNull: true },
     status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'Pending' },
+    cancelReason: { type: DataTypes.TEXT, allowNull: true },
     locationId: {
         type: DataTypes.INTEGER, allowNull: false,
         references: { model: 'locations', key: 'id', },

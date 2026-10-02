@@ -22,6 +22,8 @@ router.put('/:id', deliveryOrderController.updateDeliveryOrder);
 router.delete('/:id', deliveryOrderController.deleteDeliveryOrder);
 router.patch('/:id/assign', deliveryOrderController.assignDriverRouteVehicle);
 router.patch('/:id/approve-reject', deliveryOrderController.approveOrRejectDeliveryOrder);
+router.patch('/:id/cancel', deliveryOrderController.cancelDeliveryOrder);
+router.post('/:id/cancel', deliveryOrderController.cancelDeliveryOrder);
 router.post('/saved-summary', deliveryOrderController.getSavedDeliveryOrderSummary);
 router.post('/items-with-summary', deliveryOrderController.getDeliveryOrderItemsWithSummary);
 router.post('/clear-summary', deliveryOrderController.clearDeliveryOrderSummary);

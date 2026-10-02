@@ -906,7 +906,8 @@ exports.cancelSalesOrder = async (req, res) => {
         }
 
         const currentUserId = (req.user && req.user.id) || (req.body && req.body.user && req.body.user.id) || null;
-        await order.update({ status: 'Cancelled', updatedBy: currentUserId }, { transaction: t });
+        const { cancelReason } = req.body || {};
+        await order.update({ status: 'Cancelled', cancelReason: cancelReason || null, updatedBy: currentUserId }, { transaction: t });
 
         // If there are any Pending Delivery Orders, destroy them
         for (const doRecord of deliveryOrders) {

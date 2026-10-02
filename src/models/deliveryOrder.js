@@ -17,6 +17,7 @@ const DeliveryOrder = sequelize.define('DeliveryOrder', {
     totalWeight: { type: DataTypes.FLOAT, allowNull: true },
     totalAmount: { type: DataTypes.FLOAT, allowNull: true },
     status: { type: DataTypes.STRING, allowNull: false, defaultValue: 'Pending' },
+    cancelReason: { type: DataTypes.TEXT, allowNull: true },
     locationId: {
         type: DataTypes.INTEGER, allowNull: false,
         references: { model: 'locations', key: 'id', },
