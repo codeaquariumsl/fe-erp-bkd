@@ -168,6 +168,12 @@ exports.getAllSalesOrders = async (req, res) => {
             createdBy,
             status,
             deliveryOrderStatus,
+            startDate,
+            endDate,
+            orderStartDate,
+            orderEndDate,
+            fromDate,
+            toDate,
         } = req.query;
 
         // ── Pagination ────────────────────────────────────────────────────────
@@ -175,7 +181,7 @@ exports.getAllSalesOrders = async (req, res) => {
         const hasLimit = limit !== undefined && limit !== null && limit !== '' && !isNaN(parseInt(limit));
         const parsedLimit = hasLimit ? parseInt(limit) : 0;
         const usePagination = parsedLimit > 0;
-        const limitNum = usePagination ? Math.min(500, parsedLimit) : 0;
+        const limitNum = usePagination ? Math.min(50000, parsedLimit) : 0;
 
         // ── Where clause ──────────────────────────────────────────────────────
         const whereClause = {};
@@ -195,6 +201,43 @@ exports.getAllSalesOrders = async (req, res) => {
         // Customer filter
         if (customerId && customerId !== 'ALL') {
             whereClause.customerId = customerId;
+        }
+
+        // Order date range filter
+        const sDate = startDate || orderStartDate || fromDate;
+        const eDate = endDate || orderEndDate || toDate;
+
+        const parseDateBoundary = (val, isEnd = false) => {
+            if (!val) return null;
+            const str = String(val).trim();
+            const ymdMatch = str.match(/^(\d{4}-\d{2}-\d{2})/);
+            if (ymdMatch) {
+                return isEnd ? `${ymdMatch[1]} 23:59:59` : `${ymdMatch[1]} 00:00:00`;
+            }
+            const d = new Date(str);
+            if (!isNaN(d.getTime())) {
+                if (isEnd) {
+                    d.setHours(23, 59, 59, 999);
+                } else {
+                    d.setHours(0, 0, 0, 0);
+                }
+                return d;
+            }
+            return str;
+        };
+
+        if (sDate && eDate) {
+            whereClause.orderDate = {
+                [Op.between]: [parseDateBoundary(sDate, false), parseDateBoundary(eDate, true)]
+            };
+        } else if (sDate) {
+            whereClause.orderDate = {
+                [Op.gte]: parseDateBoundary(sDate, false)
+            };
+        } else if (eDate) {
+            whereClause.orderDate = {
+                [Op.lte]: parseDateBoundary(eDate, true)
+            };
         }
 
         // Route filter (checks SalesOrder.routeId or Customer.routeId)
