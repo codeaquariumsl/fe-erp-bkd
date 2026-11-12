@@ -846,6 +846,7 @@ exports.getAllDeliveryOrderSummaries = async (req, res) => {
                                 include: [Customer]
                             }]
                         },
+                        { model: DeliveryOrderItem, as: 'DeliveryOrderItem', attributes: ['id', 'qty', 'freeQty'], required: false },
                         { model: Item, as: 'Item', attributes: ['id', 'name', 'sku', 'barcode', 'unit'] },
                         { model: Route, as: 'Route', attributes: ['id', 'routeName'] },
                         { model: Batch, as: 'Batch', attributes: ['id', 'batchNumber'] },
@@ -902,6 +903,7 @@ exports.getAllDeliveryOrderSummaries = async (req, res) => {
                         itemGroups[itemId] = {
                             ...summaryItemJson,
                             totalQty: 0,
+                            totalFreeQty: 0,
                             summaryItemIds: [],
                             deliveryOrderIds: new Set(),
                             deliveryOrders: new Map(), // Store delivery order details
@@ -922,6 +924,10 @@ exports.getAllDeliveryOrderSummaries = async (req, res) => {
 
                     // Merge quantities and track related data
                     itemGroups[itemId].totalQty += summaryItem.qty || 0;
+                    const itemFreeQty = Number(summaryItem.freeQty || 0) > 0
+                        ? Number(summaryItem.freeQty)
+                        : Number(summaryItem.DeliveryOrderItem?.freeQty || 0);
+                    itemGroups[itemId].totalFreeQty += itemFreeQty;
                     itemGroups[itemId].summaryItemIds.push(summaryItem.id);
                     itemGroups[itemId].deliveryOrderIds.add(summaryItem.deliveryOrderId);
 
@@ -972,6 +978,7 @@ exports.getAllDeliveryOrderSummaries = async (req, res) => {
                     return {
                         ...mergedItem,
                         qty: mergedItem.totalQty, // Use merged quantity
+                        freeQty: mergedItem.totalFreeQty,
                         deliveryOrderIds: Array.from(mergedItem.deliveryOrderIds),
                         deliveryOrders: Array.from(mergedItem.deliveryOrders.values()), // Convert Map to Array
                         allItemsReady: mergedItem.isReadyCount === mergedItem.totalItems,
@@ -986,6 +993,7 @@ exports.getAllDeliveryOrderSummaries = async (req, res) => {
                         mergeInfo: {
                             originalItemsCount: mergedItem.totalItems,
                             mergedQty: mergedItem.totalQty,
+                            mergedFreeQty: mergedItem.totalFreeQty,
                             summaryItemIds: mergedItem.summaryItemIds,
                             deliveryOrdersCount: mergedItem.deliveryOrders.size
                         }
