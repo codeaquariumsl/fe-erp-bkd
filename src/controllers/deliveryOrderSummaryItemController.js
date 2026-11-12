@@ -778,6 +778,13 @@ exports.assignBatchToSummaryItem = async (req, res) => {
     }
 };
 
+// Resolve effective free quantity from summary item, falling back to linked DeliveryOrderItem.
+function resolveSummaryItemFreeQty(summaryItem) {
+    const directFreeQty = Number(summaryItem?.freeQty || 0);
+    if (directFreeQty > 0) return directFreeQty;
+    return Number(summaryItem?.DeliveryOrderItem?.freeQty || 0);
+}
+
 // Get All Delivery Order Summaries
 exports.getAllDeliveryOrderSummaries = async (req, res) => {
     try {
@@ -923,11 +930,8 @@ exports.getAllDeliveryOrderSummaries = async (req, res) => {
                     }
 
                     // Merge quantities and track related data
-                    itemGroups[itemId].totalQty += summaryItem.qty || 0;
-                    const itemFreeQty = Number(summaryItem.freeQty || 0) > 0
-                        ? Number(summaryItem.freeQty)
-                        : Number(summaryItem.DeliveryOrderItem?.freeQty || 0);
-                    itemGroups[itemId].totalFreeQty += itemFreeQty;
+                    itemGroups[itemId].totalQty += Number(summaryItem.qty || 0);
+                    itemGroups[itemId].totalFreeQty += resolveSummaryItemFreeQty(summaryItem);
                     itemGroups[itemId].summaryItemIds.push(summaryItem.id);
                     itemGroups[itemId].deliveryOrderIds.add(summaryItem.deliveryOrderId);
 
@@ -970,9 +974,10 @@ exports.getAllDeliveryOrderSummaries = async (req, res) => {
                         batchSummary[batch.batchId].totalAvailableQty += batch.batchQty;
                     });
 
-                    // Filter Batches to only include those that can fulfill the merged quantity
+                    // Filter Batches to only include those that can fulfill the merged total quantity (billed + free)
+                    const mergedTotalQty = mergedItem.totalQty + mergedItem.totalFreeQty;
                     const canFulfillBatches = Object.values(batchSummary).filter(batch =>
-                        batch.totalAvailableQty >= mergedItem.totalQty
+                        batch.totalAvailableQty >= mergedTotalQty
                     );
 
                     return {
@@ -1547,6 +1552,9 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
                     deliveryOrderSummaryId: summaryId,
                     isActive: true
                 },
+                include: [
+                    { model: DeliveryOrderItem, as: 'DeliveryOrderItem', attributes: ['id', 'qty', 'freeQty'], required: false }
+                ],
                 transaction: t
             });
 
@@ -1557,6 +1565,14 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
             if (!summaryItem.releaseStoreId) {
                 summaryItem.releaseStoreId = 1;
             }
+
+            const billedQty = Number(summaryItem.qty || 0);
+            const freeQty = resolveSummaryItemFreeQty(summaryItem);
+            const totalDispatchQty = billedQty + freeQty;
+            if (!Number.isFinite(totalDispatchQty) || totalDispatchQty < 0) {
+                throw new Error(`Invalid dispatch quantity (${totalDispatchQty}) for summary item ${summaryItem.id}`);
+            }
+
             // Check stock availability at the release store.
             // Because we are sequential, this always returns the latest committed qty.
             const releaseStoreStock = await Stock.findOne({
@@ -1568,47 +1584,48 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
             });
 
             const availableStockQty = releaseStoreStock ? (releaseStoreStock.availableQty || 0) : 0;
-            console.log(`Checking stock for item ${summaryItem.itemId} at store ${summaryItem.releaseStoreId}: available ${availableStockQty}, required ${summaryItem.qty}`);
+            console.log(`Checking stock for item ${summaryItem.itemId} at store ${summaryItem.releaseStoreId}: available ${availableStockQty}, required ${totalDispatchQty} (billed: ${billedQty}, free: ${freeQty})`);
 
-            if (availableStockQty < summaryItem.qty) {
-                throw new Error(`Insufficient stock at release store: Available: ${availableStockQty}, Required: ${summaryItem.qty} for item ${summaryItem.itemId}`);
+            if (availableStockQty < totalDispatchQty) {
+                throw new Error(`Insufficient stock at release store: Available: ${availableStockQty}, Required: ${totalDispatchQty} for item ${summaryItem.itemId}`);
             }
 
-            // Deduct stock — use sequelize.literal for an atomic decrement so
+            // Deduct total dispatch qty (billed + free) — use sequelize.literal for an atomic decrement so
             // concurrent requests (different summaries) cannot corrupt the value.
             await Stock.update(
                 {
-                    availableQty: sequelize.literal(`availableQty - ${summaryItem.qty}`),
+                    availableQty: sequelize.literal(`availableQty - ${totalDispatchQty}`),
                     updatedBy: currentUserId
                 },
                 {
                     where: {
                         id: releaseStoreStock.id,
-                        availableQty: { [Op.gte]: summaryItem.qty } // safety guard
+                        availableQty: { [Op.gte]: totalDispatchQty } // safety guard
                     },
                     transaction: t
                 }
             );
 
-            console.log(`Deducted ${summaryItem.qty} stock from store ${summaryItem.releaseStoreId} for item ${summaryItem.itemId}`);
+            console.log(`Deducted ${totalDispatchQty} stock (billed: ${billedQty}, free: ${freeQty}) from store ${summaryItem.releaseStoreId} for item ${summaryItem.itemId}`);
 
             // Create StockDetail record for the stock deduction
+            const qtyBreakdownText = freeQty > 0 ? `${billedQty} billed + ${freeQty} free` : `${billedQty} billed`;
             await StockDetail.create(
                 {
                     stockId: releaseStoreStock.id,
                     documentType: 'Delivery-Dispatch',
                     documentId: summaryItem.deliveryOrderId,
                     inOut: 'OUT',
-                    qty: summaryItem.qty,
+                    qty: totalDispatchQty,
                     date: new Date(),
-                    remark: `Dispatched for Delivery Order ${summaryItem.deliveryOrderId} (Summary ${summaryId})`,
+                    remark: `Dispatched ${totalDispatchQty} units (${qtyBreakdownText}) for Delivery Order ${summaryItem.deliveryOrderId} (Summary ${summaryId})`,
                     createdBy: currentUserId,
                     updatedBy: currentUserId
                 },
                 { transaction: t }
             );
 
-            console.log(`Created StockDetail record for stock deduction: stockId ${releaseStoreStock.id}, qty ${summaryItem.qty}`);
+            console.log(`Created StockDetail record for stock deduction: stockId ${releaseStoreStock.id}, qty ${totalDispatchQty}`);
 
             // Update the summary item
             const [updatedCount] = await DeliveryOrderSummaryItem.update(
@@ -1639,14 +1656,14 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
 
                 // if (vehicleStock) {
                 //     await vehicleStock.update({
-                //         availableQty: (vehicleStock.availableQty || 0) + summaryItem.qty,
+                //         availableQty: (vehicleStock.availableQty || 0) + totalDispatchQty,
                 //         updatedBy: currentUserId
                 //     }, { transaction: t });
                 // } else {
                 //     vehicleStock = await Stock.create({
                 //         itemId: summaryItem.itemId,
                 //         lorryId: deliveryOrder.vehicleId,
-                //         availableQty: summaryItem.qty,
+                //         availableQty: totalDispatchQty,
                 //         locationId: deliveryOrder.locationId,
                 //         createdBy: currentUserId,
                 //         updatedBy: currentUserId
@@ -1660,7 +1677,7 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
                 //         documentType: 'Delivery-Dispatch',
                 //         documentId: summaryItem.deliveryOrderId,
                 //         inOut: 'IN',
-                //         qty: summaryItem.qty,
+                //         qty: totalDispatchQty,
                 //         date: new Date(),
                 //         remark: `Loaded to vehicle ${deliveryOrder.vehicleId} for Delivery Order ${summaryItem.deliveryOrderId} (Summary ${summaryId})`,
                 //         createdBy: currentUserId,
@@ -1669,15 +1686,17 @@ exports.dispatchDeliveryOrderSummary = async (req, res) => {
                 //     { transaction: t }
                 // );
 
-                console.log(`Transferred ${summaryItem.qty} of item ${summaryItem.itemId} to vehicle stock for vehicleId ${deliveryOrder.vehicleId}`);
+                console.log(`Transferred ${totalDispatchQty} of item ${summaryItem.itemId} to vehicle stock for vehicleId ${deliveryOrder.vehicleId}`);
             }
 
             updateResults.push({
                 itemId: item.id,
                 batchId: item.batchId,
-                summaryItemQty: summaryItem.qty,
+                summaryItemQty: billedQty,
+                freeQty,
+                totalQty: totalDispatchQty,
                 releaseStoreId: summaryItem.releaseStoreId,
-                stockDeducted: summaryItem.qty,
+                stockDeducted: totalDispatchQty,
                 updated: updatedCount > 0
             });
         }
