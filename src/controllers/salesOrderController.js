@@ -1018,7 +1018,8 @@ exports.getSalesItemsByCustomer = async (req, res) => {
                     as: 'Item',
                     where: {
                         status: 'active',
-                        doNotAllowDirectSale: false
+                        doNotAllowDirectSale: false,
+                        isProductionRawMaterial: false
                     },
                     include: [
                         {
@@ -1289,7 +1290,8 @@ exports.getSalesItemsByCustomerMobile = async (req, res) => {
         const items = await Item.findAll({
             where: {
                 status: 'active',
-                doNotAllowDirectSale: false
+                doNotAllowDirectSale: false,
+                isProductionRawMaterial: false
             },
             include: [
                 {
