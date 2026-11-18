@@ -1,3 +1,4 @@
+const { Op } = require('sequelize');
 const GRNScheduleItem = require('../models/grnScheduleItem');
 const { GRNItem, Stock, User, GRN, Category, Item } = require('../models');
 const skuGenerator = require('../utils/skuGenerator');
@@ -120,8 +121,12 @@ exports.getItems = async (req, res) => {
             obj.createdUserName = obj.Creator ? obj.Creator.username : null;
             obj.updatedUserName = obj.Updater ? obj.Updater.username : null;
 
-            // Build stock where clause
-            const stockWhere = { itemId: item.id, status: 'Active' };
+            // Build stock where clause (store stock only, exclude lorry stock)
+            const stockWhere = { 
+                itemId: item.id, 
+                status: 'Active',
+                storeId: { [Op.ne]: null }
+            };
             if (locationId) stockWhere.locationId = locationId;
 
             // Fetch stock records for this item

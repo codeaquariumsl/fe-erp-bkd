@@ -1086,10 +1086,11 @@ exports.getSalesItemsByCustomer = async (req, res) => {
             }
             processedItemIds.add(item.id);
 
-            // Get Active stock for this item
+            // Get Active stock for this item (store stock only, exclude lorry stock)
             const stockWhereClause = {
                 itemId: item.id,
-                status: 'Active'
+                status: 'Active',
+                storeId: { [Op.ne]: null }
             };
 
             if (locationId) {
@@ -1304,7 +1305,8 @@ exports.getSalesItemsByCustomerMobile = async (req, res) => {
         for (const item of items) {
             const stockWhereClause = {
                 itemId: item.id,
-                status: 'Active'
+                status: 'Active',
+                storeId: { [Op.ne]: null }
             };
 
             if (locationId) {
